@@ -31,3 +31,10 @@ coverage/
 dist/
 *.tgz
 .cache
+
+# Uploaded files (keep folder structure via .gitkeep)
+uploads/*
+!uploads/.gitkeep
+!uploads/images/
+uploads/images/*
+!uploads/images/.gitkeep
