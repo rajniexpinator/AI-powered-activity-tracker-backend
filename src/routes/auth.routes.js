@@ -113,6 +113,39 @@ router.get('/me', protectRoute, (req, res) => {
   res.json({ user: toUserResponse(req.user) })
 })
 
+// PATCH /api/auth/me — update current user profile (name, password)
+router.patch('/me', protectRoute, async (req, res, next) => {
+  try {
+    const { name, currentPassword, newPassword } = req.body || {}
+    const update = {}
+    if (typeof name === 'string') {
+      update.name = name.trim() || undefined
+    }
+    if (newPassword && typeof newPassword === 'string' && newPassword.length >= 6) {
+      const user = await User.findById(req.user._id).select('+passwordHash')
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Current password required to set a new password' })
+      }
+      const match = await bcrypt.compare(currentPassword, user.passwordHash)
+      if (!match) {
+        return res.status(401).json({ error: 'Current password is incorrect' })
+      }
+      update.passwordHash = await bcrypt.hash(newPassword, 10)
+    }
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ error: 'Provide name and/or newPassword (with currentPassword)' })
+    }
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: update },
+      { new: true, runValidators: true }
+    ).select('-passwordHash')
+    res.json({ user: toUserResponse(updated) })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/auth/users — list users (admin only)
 router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next) => {
   try {
