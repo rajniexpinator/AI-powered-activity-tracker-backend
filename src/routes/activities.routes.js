@@ -1,6 +1,7 @@
 import { Router } from 'express'
-import { protectRoute } from '../middleware/auth.js'
+import { protectRoute, requireRole } from '../middleware/auth.js'
 import { Activity } from '../models/Activity.js'
+import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 
 const router = Router()
 
@@ -38,6 +39,133 @@ router.post('/', protectRoute, async (req, res, next) => {
     })
 
     res.status(201).json({ activity })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities
+// Query (optional): limit (default 20)
+// Returns recent activities for the logged-in user, newest first.
+router.get('/', protectRoute, async (req, res, next) => {
+  try {
+    const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 20 : rawLimit, 1), 100)
+
+    const activities = await Activity.find({ userId: req.user._id, isArchived: false })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select({ customer: 1, summary: 1, createdAt: 1 })
+      .lean()
+
+    res.json({ activities })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/admin
+// Admin: view all employee activity with optional filters.
+// Query: userId, customer, from, to, limit
+router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { userId, customer, from, to } = req.query
+
+    const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
+
+    const filter = { isArchived: false }
+
+    if (typeof userId === 'string' && userId) {
+      filter.userId = userId
+    }
+
+    if (typeof customer === 'string' && customer.trim()) {
+      filter.customer = customer.trim()
+    }
+
+    if (typeof from === 'string' || typeof to === 'string') {
+      const createdAt = {}
+      if (typeof from === 'string' && from) {
+        const fromDate = new Date(from)
+        if (!Number.isNaN(fromDate.getTime())) {
+          createdAt.$gte = fromDate
+        }
+      }
+      if (typeof to === 'string' && to) {
+        const toDate = new Date(to)
+        if (!Number.isNaN(toDate.getTime())) {
+          // include entire day if only a date is passed
+          createdAt.$lte = toDate
+        }
+      }
+      if (Object.keys(createdAt).length > 0) {
+        filter.createdAt = createdAt
+      }
+    }
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('userId', 'name email role')
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1 })
+      .lean()
+
+    res.json({ activities })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/admin/weekly-report
+// Admin: generate a weekly quality report via AI for the filtered activities.
+// Body: { userId?, customer?, from?, to?, limit? }
+router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { userId, customer, from, to, limit } = req.body || {}
+
+    const rawLimit = typeof limit === 'number' ? limit : NaN
+    const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
+
+    const filter = { isArchived: false }
+
+    if (userId) {
+      filter.userId = userId
+    }
+
+    if (typeof customer === 'string' && customer.trim()) {
+      filter.customer = customer.trim()
+    }
+
+    if (from || to) {
+      const createdAt = {}
+      if (from) {
+        const fromDate = new Date(from)
+        if (!Number.isNaN(fromDate.getTime())) {
+          createdAt.$gte = fromDate
+        }
+      }
+      if (to) {
+        const toDate = new Date(to)
+        if (!Number.isNaN(toDate.getTime())) {
+          createdAt.$lte = toDate
+        }
+      }
+      if (Object.keys(createdAt).length > 0) {
+        filter.createdAt = createdAt
+      }
+    }
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(max)
+      .populate('userId', 'name email role')
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1 })
+      .lean()
+
+    const report = await generateWeeklyQualityReport(activities, { from, to })
+
+    res.json({ report })
   } catch (err) {
     next(err)
   }
