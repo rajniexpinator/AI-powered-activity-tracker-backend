@@ -37,6 +37,31 @@ router.get('/', protectRoute, async (_req, res, next) => {
   }
 })
 
+// PATCH /api/customers/:id
+// Body: { name?: string, email?: string, notes?: string }
+router.patch('/:id', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { name, email, notes } = req.body || {}
+    const update = {}
+    if (typeof name === 'string' && name.trim()) update.name = name.trim()
+    if (Object.prototype.hasOwnProperty.call(req.body, 'email')) {
+      update.email = typeof email === 'string' && email.trim() ? email.trim() : undefined
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'notes')) {
+      update.notes = typeof notes === 'string' && notes.trim() ? notes.trim() : undefined
+    }
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ error: 'Provide at least one field to update: name, email, or notes' })
+    }
+    const customer = await Customer.findByIdAndUpdate(id, { $set: update }, { new: true }).lean()
+    if (!customer) return res.status(404).json({ error: 'Customer not found' })
+    res.json({ customer })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // DELETE /api/customers/:id
 // Admins can remove a customer record.
 router.delete('/:id', protectRoute, requireRole('admin'), async (req, res, next) => {

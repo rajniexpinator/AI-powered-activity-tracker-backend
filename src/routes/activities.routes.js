@@ -6,11 +6,11 @@ import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 const router = Router()
 
 // POST /api/activities
-// Body: { rawText: string, structured: any }
+// Body: { rawText: string, structured: any, images?: string[] }
 // Saves a new Activity linked to the logged-in user.
 router.post('/', protectRoute, async (req, res, next) => {
   try {
-    const { rawText, structured } = req.body || {}
+    const { rawText, structured, images } = req.body || {}
 
     if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
       return res.status(400).json({ error: 'rawText is required and must be a non-empty string' })
@@ -30,13 +30,19 @@ router.post('/', protectRoute, async (req, res, next) => {
         ? structured.customer.trim()
         : undefined
 
-    const activity = await Activity.create({
+    const activityPayload = {
       userId: req.user._id,
       customer,
       summary,
       rawConversation: rawText,
       structuredData: structured,
-    })
+    }
+
+    if (Array.isArray(images)) {
+      activityPayload.images = images.filter((url) => typeof url === 'string' && url.trim())
+    }
+
+    const activity = await Activity.create(activityPayload)
 
     res.status(201).json({ activity })
   } catch (err) {
@@ -112,6 +118,68 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
       .lean()
 
     res.json({ activities })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/:id/archive
+// Marks a single activity as archived (owner or admin only).
+router.post('/:id/archive', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    if (!id) {
+      return res.status(400).json({ error: 'Activity id is required' })
+    }
+
+    const activity = await Activity.findById(id)
+
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    const isOwner = String(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden — you cannot archive this activity' })
+    }
+
+    activity.isArchived = true
+    activity.archivedAt = new Date()
+    await activity.save()
+
+    res.json({ success: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/:id
+// Returns a single activity with full raw + structured data.
+router.get('/:id', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    if (!id) {
+      return res.status(400).json({ error: 'Activity id is required' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    const isOwner = String(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden — you cannot view this activity' })
+    }
+
+    res.json({ activity })
   } catch (err) {
     next(err)
   }
