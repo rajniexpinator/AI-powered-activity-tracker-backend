@@ -51,34 +51,46 @@ router.post('/', protectRoute, async (req, res, next) => {
 })
 
 // GET /api/activities
-// Query (optional): limit (default 20)
-// Returns recent activities for the logged-in user, newest first.
+// Query (optional): limit (default 20), page (default 1)
+// Returns recent activities for the logged-in user, newest first. Paginated.
 router.get('/', protectRoute, async (req, res, next) => {
   try {
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
     const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 20 : rawLimit, 1), 100)
+    const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
+    const skip = (page - 1) * limit
 
-    const activities = await Activity.find({ userId: req.user._id, isArchived: false })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select({ customer: 1, summary: 1, createdAt: 1 })
-      .lean()
+    const filter = { userId: req.user._id, isArchived: false }
+    const [activities, total] = await Promise.all([
+      Activity.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select({ customer: 1, summary: 1, createdAt: 1 })
+        .lean(),
+      Activity.countDocuments(filter),
+    ])
 
-    res.json({ activities })
+    const totalPages = Math.ceil(total / limit)
+    res.json({ activities, total, page, limit, totalPages })
   } catch (err) {
     next(err)
   }
 })
 
 // GET /api/activities/admin
-// Admin: view all employee activity with optional filters.
-// Query: userId, customer, from, to, limit
-router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
+// Admin: view all employee activity with optional filters. Paginated.
+// Query: userId, customer, from, to, limit, page
+router.get('/admin', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
 
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
-    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
+    const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 50 : rawLimit, 1), 200)
+    const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
+    const skip = (page - 1) * limit
 
     const filter = { isArchived: false }
 
@@ -110,14 +122,91 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
       }
     }
 
-    const activities = await Activity.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1 })
-      .lean()
+    const [activities, total] = await Promise.all([
+      Activity.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('userId', 'name email role')
+        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1 })
+        .lean(),
+      Activity.countDocuments(filter),
+    ])
 
-    res.json({ activities })
+    const totalPages = Math.ceil(total / limit)
+    res.json({ activities, total, page, limit, totalPages })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/admin/archived - must be before /:id
+router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { userId, customer, from, to } = req.query
+
+    const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 50 : rawLimit, 1), 200)
+    const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
+    const skip = (page - 1) * limit
+
+    const filter = { isArchived: true }
+
+    if (typeof userId === 'string' && userId) filter.userId = userId
+    if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
+    if (typeof from === 'string' || typeof to === 'string') {
+      const createdAt = {}
+      if (typeof from === 'string' && from) {
+        const fromDate = new Date(from)
+        if (!Number.isNaN(fromDate.getTime())) createdAt.$gte = fromDate
+      }
+      if (typeof to === 'string' && to) {
+        const toDate = new Date(to)
+        if (!Number.isNaN(toDate.getTime())) createdAt.$lte = toDate
+      }
+      if (Object.keys(createdAt).length > 0) filter.createdAt = createdAt
+    }
+
+    const [activities, total] = await Promise.all([
+      Activity.find(filter)
+        .sort({ archivedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('userId', 'name email role')
+        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1 })
+        .lean(),
+      Activity.countDocuments(filter),
+    ])
+
+    const totalPages = Math.ceil(total / limit)
+    res.json({ activities, total, page, limit, totalPages })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/:id/restore
+router.post('/:id/restore', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    if (!id) return res.status(400).json({ error: 'Activity id is required' })
+
+    const activity = await Activity.findById(id)
+    if (!activity || !activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found or not archived' })
+    }
+
+    const isOwner = String(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden — you cannot restore this activity' })
+    }
+
+    activity.isArchived = false
+    activity.archivedAt = undefined
+    await activity.save()
+    res.json({ success: true })
   } catch (err) {
     next(err)
   }
@@ -188,7 +277,7 @@ router.get('/:id', protectRoute, async (req, res, next) => {
 // POST /api/activities/admin/weekly-report
 // Admin: generate a weekly quality report via AI for the filtered activities.
 // Body: { userId?, customer?, from?, to?, limit? }
-router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (req, res, next) => {
+router.post('/admin/weekly-report', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { userId, customer, from, to, limit } = req.body || {}
 

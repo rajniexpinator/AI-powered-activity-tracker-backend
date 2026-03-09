@@ -27,10 +27,16 @@ router.post('/', protectRoute, async (req, res, next) => {
 })
 
 // GET /api/customers
-// Returns all customers (for now) sorted by name.
-router.get('/', protectRoute, async (_req, res, next) => {
+// Admin: returns all customers with createdBy (who added them).
+// Non-admin: returns only customers created by the logged-in user.
+router.get('/', protectRoute, async (req, res, next) => {
   try {
-    const customers = await Customer.find().sort({ name: 1 }).lean()
+    const isAdmin = req.user.role === 'admin'
+    const filter = isAdmin ? {} : { createdBy: req.user._id }
+    const customers = await Customer.find(filter)
+      .sort({ name: 1 })
+      .populate('createdBy', 'name email role')
+      .lean()
     res.json({ customers })
   } catch (err) {
     next(err)
