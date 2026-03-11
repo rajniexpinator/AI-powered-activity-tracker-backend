@@ -4,11 +4,11 @@ import { createChatCompletion } from './openai.js'
  * Generate a weekly quality report from a list of activities.
  *
  * @param {Array<any>} activities - Activity documents (already filtered for the period)
- * @param {{ from?: string, to?: string }} [options]
+ * @param {{ from?: string, to?: string, includeCustomerSummaries?: boolean }} [options]
  * @returns {Promise<string>}
  */
 export async function generateWeeklyQualityReport(activities, options = {}) {
-  const { from, to } = options
+  const { from, to, includeCustomerSummaries } = options
 
   if (!activities || activities.length === 0) {
     return 'No quality activities were logged in the selected period.'
@@ -21,28 +21,57 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
         }${to ? new Date(to).toLocaleDateString() : ''}`.trim()
       : 'for the recent period'
 
-  const lines = activities.slice(0, 200).map((a) => {
+  const normalized = activities.slice(0, 250).map((a) => {
     const user = a.userId || {}
     const structured = a.structuredData || {}
+    const customer = a.customer || structured.customer || 'Unknown'
+    return {
+      createdAt: a.createdAt,
+      customer,
+      employeeName: user.name || 'Unknown',
+      employeeEmail: user.email || 'no email',
+      summary: a.summary || structured.summary || '',
+      part: structured.part_name,
+      intent: structured.intent,
+      outcome: structured.outcome,
+      nextActions: Array.isArray(structured.next_actions) ? structured.next_actions : [],
+    }
+  })
+
+  const buildEntryLines = (a) => {
     const parts = []
     parts.push(`- When: ${new Date(a.createdAt).toISOString()}`)
-    parts.push(`  Employee: ${user.name || 'Unknown'} (${user.email || 'no email'})`)
-    parts.push(`  Customer: ${a.customer || structured.customer || 'Unknown'}`)
-    parts.push(`  Summary: ${a.summary || structured.summary || ''}`)
-    if (structured.part_name) {
-      parts.push(`  Part: ${structured.part_name}`)
-    }
-    if (structured.intent) {
-      parts.push(`  Intent: ${structured.intent}`)
-    }
-    if (structured.outcome) {
-      parts.push(`  Outcome: ${structured.outcome}`)
-    }
-    if (Array.isArray(structured.next_actions) && structured.next_actions.length > 0) {
-      parts.push(`  Next actions: ${structured.next_actions.join('; ')}`)
+    parts.push(`  Employee: ${a.employeeName} (${a.employeeEmail})`)
+    parts.push(`  Customer: ${a.customer}`)
+    parts.push(`  Summary: ${a.summary}`)
+    if (a.part) parts.push(`  Part: ${a.part}`)
+    if (a.intent) parts.push(`  Intent: ${a.intent}`)
+    if (a.outcome) parts.push(`  Outcome: ${a.outcome}`)
+    if (Array.isArray(a.nextActions) && a.nextActions.length > 0) {
+      parts.push(`  Next actions: ${a.nextActions.join('; ')}`)
     }
     return parts.join('\n')
-  })
+  }
+
+  let logsBlock = ''
+  if (includeCustomerSummaries) {
+    const byCustomer = new Map()
+    for (const a of normalized) {
+      const key = a.customer || 'Unknown'
+      if (!byCustomer.has(key)) byCustomer.set(key, [])
+      byCustomer.get(key).push(a)
+    }
+    const chunks = Array.from(byCustomer.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(0, 50)
+      .map(([customer, items]) => {
+        const lines = items.slice(0, 80).map(buildEntryLines)
+        return [`## Customer: ${customer}`, lines.join('\n\n')].join('\n')
+      })
+    logsBlock = chunks.join('\n\n')
+  } else {
+    logsBlock = normalized.slice(0, 200).map(buildEntryLines).join('\n\n')
+  }
 
   const system = `
 You are a senior quality engineer at Apex Quality Control.
@@ -60,9 +89,14 @@ Keep the report clear and structured with short sections and bullet points.
 Do NOT invent issues that are not supported by the logs.`.trim()
 
   const user = `
-Here are the activity logs for this period:
+Here are the activity logs for this period${includeCustomerSummaries ? ' (grouped by customer)' : ''}:
 
-${lines.join('\n\n')}
+${logsBlock}
+
+If logs are grouped by customer, include a clear section per customer with:
+- Summary of visits/issues
+- Key actions taken
+- Risks and next follow-ups
 
 Write the weekly quality report now.`.trim()
 

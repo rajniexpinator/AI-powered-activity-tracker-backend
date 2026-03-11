@@ -4,6 +4,7 @@ import { aiRouter } from './ai.routes.js'
 import { activitiesRouter } from './activities.routes.js'
 import { customersRouter } from './customers.routes.js'
 import { uploadRouter } from './upload.routes.js'
+import { reportsRouter } from './reports.routes.js'
 
 const router = Router()
 
@@ -21,5 +22,6 @@ router.use('/ai', aiRouter)
 router.use('/activities', activitiesRouter)
 router.use('/customers', customersRouter)
 router.use('/upload', uploadRouter)
+router.use('/reports', reportsRouter)
 
 export { router as apiRouter }

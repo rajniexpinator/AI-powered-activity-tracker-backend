@@ -140,8 +140,96 @@ router.get('/admin', protectRoute, requireRole('admin', 'supervisor'), async (re
   }
 })
 
+// GET /api/activities/admin/export
+// Admin/Supervisor: export filtered activity as CSV.
+// Query: userId, customer, from, to, limit, archived
+router.get('/admin/export', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+  try {
+    const { userId, customer, from, to } = req.query
+
+    const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 1000 : rawLimit, 1), 5000)
+    const includeArchived = req.query.archived === 'true'
+
+    const filter = { isArchived: includeArchived }
+
+    if (typeof userId === 'string' && userId) {
+      filter.userId = userId
+    }
+
+    if (typeof customer === 'string' && customer.trim()) {
+      filter.customer = customer.trim()
+    }
+
+    if (typeof from === 'string' || typeof to === 'string') {
+      const createdAt = {}
+      if (typeof from === 'string' && from) {
+        const fromDate = new Date(from)
+        if (!Number.isNaN(fromDate.getTime())) {
+          createdAt.$gte = fromDate
+        }
+      }
+      if (typeof to === 'string' && to) {
+        const toDate = new Date(to)
+        if (!Number.isNaN(toDate.getTime())) {
+          createdAt.$lte = toDate
+        }
+      }
+      if (Object.keys(createdAt).length > 0) {
+        filter.createdAt = createdAt
+      }
+    }
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('userId', 'name email role')
+      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1 })
+      .lean()
+
+    const esc = (value) => {
+      if (value === null || value === undefined) return '""'
+      const s = String(value).replace(/"/g, '""')
+      return `"${s}"`
+    }
+
+    const header = [
+      'id',
+      'created_at',
+      'employee_name',
+      'employee_email',
+      'employee_role',
+      'customer',
+      'summary',
+      'status',
+    ]
+
+    const rows = activities.map((a) => {
+      const user = a.userId || {}
+      return [
+        a._id,
+        a.createdAt ? new Date(a.createdAt).toISOString() : '',
+        user.name || '',
+        user.email || '',
+        user.role || '',
+        a.customer || '',
+        a.summary || '',
+        a.isArchived ? 'archived' : 'active',
+      ]
+    })
+
+    const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\n')
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="activities-export.csv"')
+    res.send(csv)
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/activities/admin/archived - must be before /:id
-router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, res, next) => {
+router.get('/admin/archived', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
 

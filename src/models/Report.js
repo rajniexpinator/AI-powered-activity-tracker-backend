@@ -1,0 +1,31 @@
+import mongoose from 'mongoose'
+
+const reportSchema = new mongoose.Schema(
+  {
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    scopeRole: { type: String, enum: ['admin', 'supervisor'], required: true },
+
+    // Filters used to generate this report
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // optional filter for employee
+    customer: { type: String, trim: true }, // optional single-customer report
+    from: { type: Date },
+    to: { type: Date },
+
+    includeCustomerSummaries: { type: Boolean, default: false },
+
+    // Output
+    content: { type: String, required: true },
+    model: { type: String, default: 'gpt-4o-mini' },
+
+    // Basic stats
+    activityCount: { type: Number, default: 0 },
+  },
+  { timestamps: true }
+)
+
+reportSchema.index({ createdBy: 1, createdAt: -1 })
+reportSchema.index({ customer: 1, createdAt: -1 })
+reportSchema.index({ userId: 1, createdAt: -1 })
+
+export const Report = mongoose.model('Report', reportSchema)
+
