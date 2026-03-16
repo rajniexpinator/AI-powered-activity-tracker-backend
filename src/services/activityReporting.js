@@ -77,28 +77,40 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
 You are a senior quality engineer at Apex Quality Control.
 You receive a list of structured activity logs from automotive plants (mainly Ford) where Apex represents suppliers.
 
-Write a concise weekly quality report ${periodLabel} that could be emailed to supplier engineering / plant management.
+Write a professional weekly quality report ${periodLabel} that can be sent directly to supplier engineering / plant management.
 
-Focus on:
-- Key customers and plants visited
-- Top issues / concerns and their status
-- Actions taken by Apex employees
-- Risks and recommended follow-ups for next week
+Formatting rules (very important):
+- Do NOT use markdown characters like *, **, ###, or ---.
+- Use normal headings with numbers, for example:
+  Weekly Quality Report – 09/03/2026 to 16/03/2026
+  1. Customers and Plants Visited
+  2. Summary of Visits and Issues
+  3. Key Actions Taken
+  4. Risks and Recommended Follow-Ups
+  5. Next Steps / Closing
+- Use short paragraphs and simple hyphen bullets (e.g. "- Issue: ..."), with blank lines between sections.
+- Keep the tone concise, clear, and businesslike.
 
-Keep the report clear and structured with short sections and bullet points.
-Do NOT invent issues that are not supported by the logs.`.trim()
+Only describe items that are supported by the logs. Do not invent new issues or customers.`.trim()
 
   const user = `
 Here are the activity logs for this period${includeCustomerSummaries ? ' (grouped by customer)' : ''}:
 
 ${logsBlock}
 
-If logs are grouped by customer, include a clear section per customer with:
-- Summary of visits/issues
-- Key actions taken
-- Risks and next follow-ups
+Using ONLY the information above, write a clean weekly quality report in the following structure:
 
-Write the weekly quality report now.`.trim()
+- Title line with "Weekly Quality Report" and the period.
+- Section 1: Customers and Plants Visited (list main customers/plants and dates).
+- Section 2: Summary of Visits and Issues (grouped by customer when possible).
+- Section 3: Key Actions Taken.
+- Section 4: Risks and Recommended Follow-Ups.
+- Section 5: Next Steps / Closing sentence.
+
+Remember:
+- No markdown syntax.
+- Simple numbered headings and bullet points.
+- Short, readable paragraphs suitable for pasting into an email or Word document.`.trim()
 
   const completion = await createChatCompletion(
     [

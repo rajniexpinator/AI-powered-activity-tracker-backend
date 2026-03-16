@@ -4,8 +4,7 @@ import { Customer } from '../models/Customer.js'
 
 const router = Router()
 
-// POST /api/customers
-// Body: { name: string, email?: string, notes?: string }
+
 router.post('/', protectRoute, async (req, res, next) => {
   try {
     const { name, email, notes } = req.body || {}
@@ -26,9 +25,7 @@ router.post('/', protectRoute, async (req, res, next) => {
   }
 })
 
-// GET /api/customers
-// Admin: returns all customers with createdBy (who added them).
-// Non-admin: returns only customers created by the logged-in user.
+
 router.get('/', protectRoute, async (req, res, next) => {
   try {
     const isAdmin = req.user.role === 'admin'
@@ -43,8 +40,7 @@ router.get('/', protectRoute, async (req, res, next) => {
   }
 })
 
-// PATCH /api/customers/:id
-// Body: { name?: string, email?: string, notes?: string }
+
 router.patch('/:id', protectRoute, async (req, res, next) => {
   try {
     const { id } = req.params
@@ -68,8 +64,7 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
   }
 })
 
-// DELETE /api/customers/:id
-// Admins can remove a customer record.
+
 router.delete('/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { id } = req.params

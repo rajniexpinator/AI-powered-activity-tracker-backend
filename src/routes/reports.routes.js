@@ -25,9 +25,7 @@ function buildActivityFilter({ userId, customer, from, to, archived }) {
   return filter
 }
 
-// POST /api/reports/generate
-// Admin/Supervisor: generate a report, store it, return { report, reportId }
-// Body: { userId?, customer?, from?, to?, limit?, includeCustomerSummaries? }
+
 router.post('/generate', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { userId, customer, from, to, limit, includeCustomerSummaries } = req.body || {}
