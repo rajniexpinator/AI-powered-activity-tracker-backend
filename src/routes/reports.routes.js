@@ -121,5 +121,32 @@ router.get('/:id', protectRoute, requireRole('admin', 'supervisor'), async (req,
   }
 })
 
+// DELETE /api/reports/:id
+// Admin/Supervisor: delete a saved report (only if createdBy is you)
+router.delete('/:id', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+  try {
+    const report = await Report.findById(req.params.id).lean()
+    if (!report) return res.status(404).json({ error: 'Report not found' })
+    if (String(report.createdBy) !== String(req.user._id)) {
+      return res.status(403).json({ error: 'Forbidden — you cannot delete this report' })
+    }
+    await Report.deleteOne({ _id: req.params.id })
+    res.json({ success: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/reports/clear
+// Admin/Supervisor: clear your report history
+router.post('/clear', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+  try {
+    const result = await Report.deleteMany({ createdBy: req.user._id })
+    res.json({ success: true, deleted: result.deletedCount || 0 })
+  } catch (err) {
+    next(err)
+  }
+})
+
 export { router as reportsRouter }
 
