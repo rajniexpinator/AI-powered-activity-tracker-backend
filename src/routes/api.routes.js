@@ -6,6 +6,7 @@ import { customersRouter } from './customers.routes.js'
 import { uploadRouter } from './upload.routes.js'
 import { reportsRouter } from './reports.routes.js'
 import { ms365Router } from './ms365.routes.js'
+import { barcodesRouter } from './barcodes.routes.js'
 
 const router = Router()
 
@@ -25,5 +26,6 @@ router.use('/customers', customersRouter)
 router.use('/upload', uploadRouter)
 router.use('/reports', reportsRouter)
 router.use('/ms365', ms365Router)
+router.use('/barcodes', barcodesRouter)
 
 export { router as apiRouter }
