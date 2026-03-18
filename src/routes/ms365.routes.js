@@ -5,6 +5,7 @@ import { Ms365RecipientConfig } from '../models/Ms365RecipientConfig.js'
 import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
 import { createChatCompletion, getAssistantContent } from '../services/openai.js'
 import { Report } from '../models/Report.js'
+import { renderWeeklyReportPdf } from '../services/reportPdf.js'
 
 const router = Router()
 
@@ -102,13 +103,26 @@ router.post('/drafts/weekly-report', protectRoute, requireRole('admin'), async (
       cc: ccList,
       subject: safeSubject,
       text: safeBodyText,
-      attachments: [
-        {
-          name: 'weekly-report.txt',
-          contentType: 'text/plain',
-          contentText: report.content,
-        },
-      ],
+      attachments: await (async () => {
+        const titleParts = ['Weekly quality report']
+        if (report.from || report.to) {
+          const fromLabel = report.from ? new Date(report.from).toLocaleDateString() : ''
+          const toLabel = report.to ? new Date(report.to).toLocaleDateString() : ''
+          const range = `${fromLabel}${fromLabel && toLabel ? ' to ' : ''}${toLabel}`.trim()
+          if (range) titleParts.push(range)
+        }
+        if (report.customer) titleParts.push(String(report.customer))
+        const title = titleParts.join(' – ')
+
+        const pdf = await renderWeeklyReportPdf({ title, content: report.content })
+        return [
+          {
+            name: 'weekly-report.pdf',
+            contentType: 'application/pdf',
+            contentBytesBase64: pdf.toString('base64'),
+          },
+        ]
+      })(),
     })
 
     res.status(201).json({ draft })

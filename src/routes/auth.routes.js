@@ -159,20 +159,62 @@ router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next)
 // PATCH /api/auth/users/:id — update role or isActive (admin only)
 router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { role, isActive } = req.body || {}
+    const { role, isActive, name, email, resetPassword } = req.body || {}
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
     if (role && ['admin', 'supervisor', 'employee'].includes(role)) update.role = role
+    if (typeof name === 'string') update.name = name.trim() || undefined
+    if (typeof email === 'string' && email.trim()) update.email = email.trim().toLowerCase()
+
+    if (resetPassword && typeof resetPassword === 'string') {
+      if (resetPassword.length < 6) {
+        return res.status(400).json({ error: 'resetPassword must be at least 6 characters' })
+      }
+      update.passwordHash = await bcrypt.hash(resetPassword, 10)
+    }
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: 'Provide role and/or isActive' })
+      return res.status(400).json({ error: 'Provide at least one field to update' })
+    }
+
+    const targetId = req.params.id
+    const isSelf = String(targetId) === String(req.user._id)
+    if (isSelf) {
+      if (Object.prototype.hasOwnProperty.call(update, 'role') || Object.prototype.hasOwnProperty.call(update, 'isActive')) {
+        return res.status(400).json({ error: 'You cannot change your own role or status' })
+      }
     }
     const user = await User.findByIdAndUpdate(
-      req.params.id,
+      targetId,
       { $set: update },
       { new: true, runValidators: true }
     ).select('-passwordHash')
     if (!user) return res.status(404).json({ error: 'User not found' })
     res.json({ user: toUserResponse(user) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.delete('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const targetId = req.params.id
+    if (!targetId) return res.status(400).json({ error: 'User id required' })
+    if (String(targetId) === String(req.user._id)) {
+      return res.status(400).json({ error: 'You cannot delete your own account' })
+    }
+
+    const user = await User.findById(targetId).lean()
+    if (!user) return res.status(404).json({ error: 'User not found' })
+
+    if (user.role === 'admin') {
+      const adminCount = await User.countDocuments({ role: 'admin', isActive: true })
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the last active admin' })
+      }
+    }
+
+    await User.deleteOne({ _id: targetId })
+    res.json({ success: true })
   } catch (err) {
     next(err)
   }

@@ -1,4 +1,5 @@
 import { createChatCompletion } from './openai.js'
+import { BarcodeMapping } from '../models/BarcodeMapping.js'
 
 /**
  * Generate a weekly quality report from a list of activities.
@@ -14,6 +15,18 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     return 'No quality activities were logged in the selected period.'
   }
 
+  const extractBarcodes = (raw) => {
+    if (!raw || typeof raw !== 'string') return []
+    const matches = []
+    const re = /scanned barcode:\s*([a-z0-9\-_./]+)/gi
+    let m
+    while ((m = re.exec(raw)) !== null) {
+      const code = String(m[1] || '').trim()
+      if (code) matches.push(code)
+    }
+    return matches
+  }
+
   const periodLabel =
     from || to
       ? `for the period ${from ? new Date(from).toLocaleDateString() : ''}${
@@ -25,6 +38,7 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     const user = a.userId || {}
     const structured = a.structuredData || {}
     const customer = a.customer || structured.customer || 'Unknown'
+    const barcodes = extractBarcodes(a.rawConversation)
     return {
       createdAt: a.createdAt,
       customer,
@@ -35,8 +49,33 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
       intent: structured.intent,
       outcome: structured.outcome,
       nextActions: Array.isArray(structured.next_actions) ? structured.next_actions : [],
+      barcodes,
     }
   })
+
+  const uniqueBarcodes = Array.from(
+    new Set(normalized.flatMap((a) => (Array.isArray(a.barcodes) ? a.barcodes : [])))
+  ).slice(0, 50)
+
+  let barcodeNotesBlock = ''
+  if (uniqueBarcodes.length > 0) {
+    const mappings = await BarcodeMapping.find({ barcode: { $in: uniqueBarcodes } })
+      .select({ barcode: 1, productName: 1, customer: 1, metadata: 1, updatedAt: 1 })
+      .lean()
+
+    const byCode = new Map(mappings.map((m) => [String(m.barcode), m]))
+    const lines = uniqueBarcodes.map((code) => {
+      const m = byCode.get(code)
+      if (!m) return `- ${code}: (no mapping found in database)`
+      const notes =
+        m.metadata && typeof m.metadata === 'object' && typeof m.metadata.notes === 'string'
+          ? m.metadata.notes.trim()
+          : ''
+      const label = `${m.productName ? m.productName : ''}${m.customer ? ` (${m.customer})` : ''}`.trim()
+      return `- ${code}${label ? `: ${label}` : ''}${notes ? ` — Notes: ${notes}` : ''}`
+    })
+    barcodeNotesBlock = lines.join('\n')
+  }
 
   const buildEntryLines = (a) => {
     const parts = []
@@ -45,6 +84,9 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     parts.push(`  Customer: ${a.customer}`)
     parts.push(`  Summary: ${a.summary}`)
     if (a.part) parts.push(`  Part: ${a.part}`)
+    if (Array.isArray(a.barcodes) && a.barcodes.length > 0) {
+      parts.push(`  Barcodes scanned: ${a.barcodes.slice(0, 6).join(', ')}`)
+    }
     if (a.intent) parts.push(`  Intent: ${a.intent}`)
     if (a.outcome) parts.push(`  Outcome: ${a.outcome}`)
     if (Array.isArray(a.nextActions) && a.nextActions.length > 0) {
@@ -97,6 +139,8 @@ Only describe items that are supported by the logs. Do not invent new issues or 
 Here are the activity logs for this period${includeCustomerSummaries ? ' (grouped by customer)' : ''}:
 
 ${logsBlock}
+
+${barcodeNotesBlock ? `\nBarcode mappings and notes referenced during this period:\n\n${barcodeNotesBlock}\n` : ''}
 
 Using ONLY the information above, write a clean weekly quality report in the following structure:
 

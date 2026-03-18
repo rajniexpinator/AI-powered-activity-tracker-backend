@@ -121,10 +121,11 @@ async function createMs365Draft({ to, cc, subject, html, text, attachments }) {
   for (const a of safeAttachments) {
     if (!a || typeof a !== 'object') continue
     const name = typeof a.name === 'string' && a.name.trim() ? a.name.trim() : null
+    const contentBytesBase64 = typeof a.contentBytesBase64 === 'string' ? a.contentBytesBase64 : null
     const contentText = typeof a.contentText === 'string' ? a.contentText : null
-    if (!name || contentText == null) continue
+    if (!name || (contentText == null && contentBytesBase64 == null)) continue
 
-    const contentBytes = Buffer.from(contentText, 'utf8').toString('base64')
+    const contentBytes = contentBytesBase64 ?? Buffer.from(contentText, 'utf8').toString('base64')
     const attRes = await fetch(
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderAddress)}/messages/${encodeURIComponent(
         draft.id

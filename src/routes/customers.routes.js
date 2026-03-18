@@ -56,8 +56,18 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ error: 'Provide at least one field to update: name, email, or notes' })
     }
-    const customer = await Customer.findByIdAndUpdate(id, { $set: update }, { new: true }).lean()
-    if (!customer) return res.status(404).json({ error: 'Customer not found' })
+    const existing = await Customer.findById(id).select({ createdBy: 1 }).lean()
+    if (!existing) return res.status(404).json({ error: 'Customer not found' })
+
+    const isAdmin = req.user.role === 'admin'
+    const isOwner = String(existing.createdBy) === String(req.user._id)
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({ error: 'Forbidden — you can only edit customers you created' })
+    }
+
+    const customer = await Customer.findByIdAndUpdate(id, { $set: update }, { new: true })
+      .populate('createdBy', 'name email role')
+      .lean()
     res.json({ customer })
   } catch (err) {
     next(err)
