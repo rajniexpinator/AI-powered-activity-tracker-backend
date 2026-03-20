@@ -333,6 +333,40 @@ router.post('/:id/archive', protectRoute, async (req, res, next) => {
   }
 })
 
+// DELETE /api/activities/:id
+// Permanent delete for archived activities only ("archive protection").
+// Allowed if: activity.isArchived === true AND (owner OR admin OR supervisor).
+router.delete('/:id', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+
+    if (!id) {
+      return res.status(400).json({ error: 'Activity id is required' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+    if (!activity) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    if (!activity.isArchived) {
+      return res.status(400).json({ error: 'Only archived activities can be permanently deleted' })
+    }
+
+    const isOwner = String(activity.userId) === String(req.user._id)
+    const isPrivileged = ['admin', 'supervisor'].includes(req.user.role)
+
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: 'Forbidden — you cannot delete this activity' })
+    }
+
+    await Activity.deleteOne({ _id: id })
+    res.json({ success: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/activities/:id
 // Returns a single activity with full raw + structured data.
 router.get('/:id', protectRoute, async (req, res, next) => {
