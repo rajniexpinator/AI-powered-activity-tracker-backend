@@ -3,6 +3,8 @@ import mongoose from 'mongoose'
 const barcodeMappingSchema = new mongoose.Schema(
   {
     barcode: { type: String, required: true, unique: true, trim: true },
+    partName: { type: String, trim: true },
+    partNumber: { type: String, trim: true },
     productName: { type: String, trim: true },
     customer: { type: String, trim: true },
     metadata: { type: mongoose.Schema.Types.Mixed },

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { protectRoute, requireRole } from '../middleware/auth.js'
+import { protectRoute } from '../middleware/auth.js'
 import { BarcodeMapping } from '../models/BarcodeMapping.js'
 import { createChatCompletion, getAssistantContent, isOpenAIAvailable } from '../services/openai.js'
 
@@ -15,11 +15,14 @@ function normalizeText(value) {
 
 async function buildClarificationPrompt({ barcode, mapping }) {
   const customer = mapping?.customer ? String(mapping.customer).trim() : ''
+  const partName = mapping?.partName ? String(mapping.partName).trim() : ''
+  const partNumber = mapping?.partNumber ? String(mapping.partNumber).trim() : ''
   const productName = mapping?.productName ? String(mapping.productName).trim() : ''
+  const partLabel = [partName || productName, partNumber].filter(Boolean).join(' · ')
 
   if (!isOpenAIAvailable()) {
     if (mapping) {
-      const label = [productName, customer].filter(Boolean).join(' · ') || barcode
+      const label = [partLabel, customer].filter(Boolean).join(' · ') || barcode
       return {
         mode: 'known',
         prompt: `Any notes regarding this part? (${label})`,
@@ -29,7 +32,7 @@ async function buildClarificationPrompt({ barcode, mapping }) {
     return {
       mode: 'unknown',
       prompt: 'This barcode is new. What customer and part number/product is it? Any notes regarding this part?',
-      fields: ['customer', 'productName', 'notes'],
+      fields: ['customer', 'partName', 'partNumber', 'notes'],
     }
   }
 
@@ -43,7 +46,8 @@ Return ONLY plain text. Keep it concise.`.trim()
 Barcode: ${barcode}
 Known mapping:
 - Customer: ${customer || '(unknown)'}
-- Part/Product: ${productName || '(unknown)'}
+- Part Name: ${partName || productName || '(unknown)'}
+- Part Number: ${partNumber || '(unknown)'}
 
 Ask a short follow-up question requesting notes for this known part.`
         .trim()
@@ -67,12 +71,16 @@ Ask a short question requesting:
   if (text) {
     return mapping
       ? { mode: 'known', prompt: text, fields: ['notes'] }
-      : { mode: 'unknown', prompt: text, fields: ['customer', 'productName', 'notes'] }
+      : { mode: 'unknown', prompt: text, fields: ['customer', 'partName', 'partNumber', 'notes'] }
   }
 
   return mapping
     ? { mode: 'known', prompt: 'Any notes regarding this part?', fields: ['notes'] }
-    : { mode: 'unknown', prompt: 'What customer and part number/product is this? Any notes regarding this part?', fields: ['customer', 'productName', 'notes'] }
+    : {
+        mode: 'unknown',
+        prompt: 'What customer, part name and part number is this? Any notes regarding this part?',
+        fields: ['customer', 'partName', 'partNumber', 'notes'],
+      }
 }
 
 // POST /api/barcodes/clarify
@@ -93,6 +101,8 @@ router.post('/clarify', protectRoute, async (req, res, next) => {
       mapping: mapping
         ? {
             barcode: mapping.barcode,
+            partName: mapping.partName || mapping.productName,
+            partNumber: mapping.partNumber,
             productName: mapping.productName,
             customer: mapping.customer,
             scanCount: mapping.scanCount,
@@ -118,6 +128,8 @@ router.get('/:barcode', protectRoute, async (req, res, next) => {
     res.json({
       mapping: {
         barcode: mapping.barcode,
+        partName: mapping.partName || mapping.productName,
+        partNumber: mapping.partNumber,
         productName: mapping.productName,
         customer: mapping.customer,
         scanCount: mapping.scanCount,
@@ -150,6 +162,8 @@ router.post('/scan', protectRoute, async (req, res, next) => {
     res.json({
       mapping: {
         barcode: mapping.barcode,
+        partName: mapping.partName || mapping.productName,
+        partNumber: mapping.partNumber,
         productName: mapping.productName,
         customer: mapping.customer,
         scanCount: mapping.scanCount,
@@ -163,21 +177,26 @@ router.post('/scan', protectRoute, async (req, res, next) => {
 })
 
 // PUT /api/barcodes/:barcode
-// Admin only. Creates or updates mapping.
-// Body: { customer?: string, productName?: string, metadata?: any }
-router.put('/:barcode', protectRoute, requireRole('admin'), async (req, res, next) => {
+// Creates or updates mapping.
+// Body: { customer?: string, partName?: string, partNumber?: string, productName?: string, metadata?: any }
+router.put('/:barcode', protectRoute, async (req, res, next) => {
   try {
     const barcode = normalizeBarcode(req.params.barcode)
     if (!barcode) return res.status(400).json({ error: 'barcode is required' })
 
-    const { customer, productName, metadata } = req.body || {}
+    const { customer, partName, partNumber, productName, metadata } = req.body || {}
     const update = {}
     if (typeof customer === 'string') update.customer = normalizeText(customer) || undefined
+    if (typeof partName === 'string') update.partName = normalizeText(partName) || undefined
+    if (typeof partNumber === 'string') update.partNumber = normalizeText(partNumber) || undefined
     if (typeof productName === 'string') update.productName = normalizeText(productName) || undefined
+    if (typeof partName !== 'string' && typeof productName === 'string') {
+      update.partName = normalizeText(productName) || undefined
+    }
     if (metadata !== undefined) update.metadata = metadata
 
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: 'Provide at least one field: customer, productName, metadata' })
+      return res.status(400).json({ error: 'Provide at least one field: customer, partName, partNumber, productName, metadata' })
     }
 
     update.lastScannedBy = req.user._id
@@ -191,6 +210,8 @@ router.put('/:barcode', protectRoute, requireRole('admin'), async (req, res, nex
     res.json({
       mapping: {
         barcode: mapping.barcode,
+        partName: mapping.partName || mapping.productName,
+        partNumber: mapping.partNumber,
         productName: mapping.productName,
         customer: mapping.customer,
         scanCount: mapping.scanCount,
