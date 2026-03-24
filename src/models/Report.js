@@ -3,7 +3,7 @@ import mongoose from 'mongoose'
 const reportSchema = new mongoose.Schema(
   {
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    scopeRole: { type: String, enum: ['admin', 'supervisor'], required: true },
+    scopeRole: { type: String, enum: ['admin'], required: true },
 
     // Filters used to generate this report
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // optional filter for employee

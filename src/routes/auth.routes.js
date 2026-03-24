@@ -86,7 +86,7 @@ router.post('/register', async (req, res, next) => {
       if (!adminUser || adminUser.role !== 'admin') {
         return res.status(403).json({ error: 'Only admins can register new users' })
       }
-      const r = role && ['admin', 'supervisor', 'employee'].includes(role) ? role : 'employee'
+      const r = role && ['admin', 'employee'].includes(role) ? role : 'employee'
       assignedRole = r
     }
 
@@ -162,7 +162,7 @@ router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, 
     const { role, isActive, name, email, resetPassword } = req.body || {}
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
-    if (role && ['admin', 'supervisor', 'employee'].includes(role)) update.role = role
+    if (role && ['admin', 'employee'].includes(role)) update.role = role
     if (typeof name === 'string') update.name = name.trim() || undefined
     if (typeof email === 'string' && email.trim()) update.email = email.trim().toLowerCase()
 

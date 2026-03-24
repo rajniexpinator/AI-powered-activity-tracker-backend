@@ -5,6 +5,7 @@ const accessKeyId = process.env.AWS_ACCESS_KEY_ID
 const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY
 const region = process.env.AWS_REGION || 'us-east-1'
 const bucket = process.env.AWS_S3_BUCKET
+const customEndpoint = process.env.AWS_S3_ENDPOINT
 
 export function isS3Configured() {
   return Boolean(accessKeyId && secretAccessKey && bucket)
@@ -17,8 +18,12 @@ function getClient() {
     throw new Error('AWS S3 is not configured. Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET (and optionally AWS_REGION).')
   }
   if (!s3Client) {
+    const endpoint = typeof customEndpoint === 'string' && customEndpoint.trim() ? customEndpoint.trim() : undefined
     s3Client = new S3Client({
       region,
+      // Auto-handle bucket region redirects to avoid endpoint mismatch failures.
+      followRegionRedirects: true,
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       credentials: {
         accessKeyId,
         secretAccessKey,
@@ -49,6 +54,8 @@ export async function uploadToS3(buffer, mimeType, folder = 'uploads') {
     })
   )
 
-  const url = `https://${bucket}.s3.${region}.amazonaws.com/${key}`
+  const url = customEndpoint
+    ? `${customEndpoint.replace(/\/$/, '')}/${bucket}/${key}`
+    : `https://${bucket}.s3.${region}.amazonaws.com/${key}`
   return { key, url }
 }

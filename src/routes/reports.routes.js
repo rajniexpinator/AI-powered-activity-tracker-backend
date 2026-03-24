@@ -26,7 +26,7 @@ function buildActivityFilter({ userId, customer, from, to, archived }) {
 }
 
 
-router.post('/generate', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/generate', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { userId, customer, from, to, limit, includeCustomerSummaries } = req.body || {}
 
@@ -79,7 +79,7 @@ router.post('/generate', protectRoute, requireRole('admin', 'supervisor'), async
 // GET /api/reports
 // Admin/Supervisor: list saved reports (own generated), paginated.
 // Query: page, limit
-router.get('/', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.get('/', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
     const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
@@ -108,7 +108,7 @@ router.get('/', protectRoute, requireRole('admin', 'supervisor'), async (req, re
 
 // GET /api/reports/:id
 // Admin/Supervisor: get a saved report (only if createdBy is you)
-router.get('/:id', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.get('/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const report = await Report.findById(req.params.id).lean()
     if (!report) return res.status(404).json({ error: 'Report not found' })
@@ -123,7 +123,7 @@ router.get('/:id', protectRoute, requireRole('admin', 'supervisor'), async (req,
 
 // DELETE /api/reports/:id
 // Admin/Supervisor: delete a saved report (only if createdBy is you)
-router.delete('/:id', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.delete('/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const report = await Report.findById(req.params.id).lean()
     if (!report) return res.status(404).json({ error: 'Report not found' })
@@ -139,7 +139,7 @@ router.delete('/:id', protectRoute, requireRole('admin', 'supervisor'), async (r
 
 // POST /api/reports/clear
 // Admin/Supervisor: clear your report history
-router.post('/clear', protectRoute, requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/clear', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const result = await Report.deleteMany({ createdBy: req.user._id })
     res.json({ success: true, deleted: result.deletedCount || 0 })
