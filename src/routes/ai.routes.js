@@ -34,7 +34,7 @@ router.post('/extract-activity', protectRoute, async (req, res, next) => {
 })
 
 // POST /api/ai/validate-activity
-// Body: { structured: any, rawText: string }
+// Body: { structured: any, rawText: string, images?: string[] }
 // Returns: { ok, severity, issues, suggestions }
 router.post('/validate-activity', protectRoute, async (req, res, next) => {
   try {
@@ -42,7 +42,7 @@ router.post('/validate-activity', protectRoute, async (req, res, next) => {
       return res.status(503).json({ error: 'OpenAI integration is not configured on the server' })
     }
 
-    const { structured, rawText } = req.body || {}
+    const { structured, rawText, images } = req.body || {}
 
     if (!structured || typeof structured !== 'object') {
       return res.status(400).json({ error: 'structured is required and must be an object' })
@@ -51,7 +51,11 @@ router.post('/validate-activity', protectRoute, async (req, res, next) => {
       return res.status(400).json({ error: 'rawText is required and must be a non-empty string' })
     }
 
-    const validation = await validateStructuredActivity(structured, rawText)
+    const validation = await validateStructuredActivity(
+      structured,
+      rawText,
+      Array.isArray(images) ? images : []
+    )
     res.json(validation)
   } catch (err) {
     next(err)

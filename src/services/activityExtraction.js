@@ -30,6 +30,8 @@ You must respond with a single JSON object that matches this schema:
   "source_type": string,                  // One of: "daily-walk", "repair-shop", "incoming-quality", "engineering", "quality-meeting", "manager-call-email", "other"
   "summary": string,                      // One-sentence summary of what happened
   "activity_type": string,                // e.g. "observation", "issue", "follow-up", "normal-production", "other"
+  "issue": string | null,                // The specific problem/defect/concern described (for CSV column)
+  "resolution": string | null,           // What was done/decided to address the issue (for CSV column)
   "part_name": string | null,             // e.g. "wheel liner", "BCM", "IP", etc.
   "concern_id": string | null,            // e.g. "Z1900210" or other plant concern / ticket number
   "dtc_code": string | null,              // e.g. "DTC U3000-49" if present

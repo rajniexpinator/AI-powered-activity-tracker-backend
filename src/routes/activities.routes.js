@@ -191,7 +191,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1, structuredData: 1 })
       .lean()
 
     const esc = (value) => {
@@ -207,12 +207,26 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       'employee_email',
       'employee_role',
       'customer',
+      'issue',
+      'resolution',
       'summary',
       'status',
     ]
 
     const rows = activities.map((a) => {
       const user = a.userId || {}
+      const structured = a.structuredData && typeof a.structuredData === 'object' ? a.structuredData : {}
+      const issue =
+        structured.issue ||
+        structured.problem ||
+        structured.concern ||
+        structured.activity_type ||
+        ''
+      const resolution =
+        structured.resolution ||
+        structured.outcome ||
+        structured.action_taken ||
+        ''
       return [
         a._id,
         a.createdAt ? new Date(a.createdAt).toISOString() : '',
@@ -220,6 +234,8 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
         user.email || '',
         user.role || '',
         a.customer || '',
+        issue,
+        resolution,
         a.summary || '',
         a.isArchived ? 'archived' : 'active',
       ]
