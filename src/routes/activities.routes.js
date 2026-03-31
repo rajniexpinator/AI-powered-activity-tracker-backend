@@ -1,10 +1,14 @@
 import { Router } from 'express'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { Activity } from '../models/Activity.js'
+import { Customer } from '../models/Customer.js'
+import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
+import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
+import { generateActivityAnswer } from '../services/activityAiAnswer.js'
 
 const router = Router()
-const MAX_IMAGES_PER_ENTRY = 4
+const MAX_IMAGES_PER_ENTRY = 8
 
 // POST /api/activities
 // Body: { rawText: string, structured: any, images?: string[] }
@@ -458,6 +462,115 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
 
     await activity.save()
     res.json({ activity })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/admin/ai-query
+// Admin: natural-language search over activities (e.g. "Bosch issues last week").
+// Body: { question: string, limit?: number }
+router.post('/admin/ai-query', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { question, limit } = req.body || {}
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ error: 'question is required' })
+    }
+
+    const rawLimit = typeof limit === 'number' ? limit : NaN
+    const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 50 : rawLimit, 1), 100)
+
+    const custRows = await Customer.find().select('name').lean().limit(200)
+    const names = custRows.map((c) => c.name).filter(Boolean)
+
+    const plan = await interpretActivityQuestion(question.trim(), names)
+    const filter = buildActivityFilterFromPlan(plan)
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(max)
+      .populate('userId', 'name email role')
+      .select({
+        customer: 1,
+        summary: 1,
+        rawConversation: 1,
+        createdAt: 1,
+        isArchived: 1,
+        userId: 1,
+        structuredData: 1,
+      })
+      .lean()
+
+    const answer =
+      activities.length > 0
+        ? await generateActivityAnswer(question.trim(), plan.interpretation, plan, activities)
+        : `No matching activities found for this question. Try broader wording (for example remove a part name or keyword).`
+
+    res.json({
+      interpretation: typeof plan.interpretation === 'string' ? plan.interpretation : '',
+      count: activities.length,
+      activities,
+      answer,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/admin/ai-weekly-report
+// Admin: question -> interpreted filters -> generate weekly report narrative.
+// Body: { question: string, limit?: number }
+router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { question, limit } = req.body || {}
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ error: 'question is required' })
+    }
+
+    const rawLimit = typeof limit === 'number' ? limit : NaN
+    const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
+
+    const custRows = await Customer.find().select('name').lean().limit(200)
+    const names = custRows.map((c) => c.name).filter(Boolean)
+
+    const plan = await interpretActivityQuestion(question.trim(), names)
+    const filter = buildActivityFilterFromPlan(plan)
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(max)
+      .populate('userId', 'name email role')
+      .select({
+        customer: 1,
+        summary: 1,
+        rawConversation: 1,
+        createdAt: 1,
+        isArchived: 1,
+        userId: 1,
+        structuredData: 1,
+      })
+      .lean()
+
+    const report = await generateWeeklyQualityReport(activities, {
+      from: plan.from || undefined,
+      to: plan.to || undefined,
+      includeCustomerSummaries: false,
+    })
+
+    const saved = await Report.create({
+      createdBy: req.user._id,
+      scopeRole: req.user.role,
+      userId: undefined,
+      customer: typeof plan.customerSubstring === 'string' && plan.customerSubstring.trim() ? plan.customerSubstring.trim() : undefined,
+      from: plan.from ? new Date(plan.from) : undefined,
+      to: plan.to ? new Date(plan.to) : undefined,
+      includeCustomerSummaries: false,
+      content: report,
+      model: 'gpt-4o-mini',
+      activityCount: activities.length,
+    })
+
+    res.json({ report, reportId: saved._id })
   } catch (err) {
     next(err)
   }
