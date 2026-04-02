@@ -1,7 +1,7 @@
 import multer from 'multer'
 
-// iPhone camera defaults to HEIC; originals can exceed 5 MB.
-const MAX_FILE_SIZE = 12 * 1024 * 1024 // 12 MB
+// Per-image cap (must match frontend messaging and any reverse-proxy body limits).
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const ALLOWED_MIMES = [
   'image/jpeg',
   'image/jpg',
