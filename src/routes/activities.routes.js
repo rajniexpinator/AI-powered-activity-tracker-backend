@@ -90,6 +90,28 @@ router.get('/', protectRoute, async (req, res, next) => {
   }
 })
 
+// GET /api/activities/today-count
+// Returns how many activities were created today for the logged-in user.
+router.get('/today-count', protectRoute, async (req, res, next) => {
+  try {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const end = new Date(start)
+    end.setDate(end.getDate() + 1)
+
+    const filter = {
+      userId: req.user._id,
+      isArchived: false,
+      createdAt: { $gte: start, $lt: end },
+    }
+
+    const todayCount = await Activity.countDocuments(filter)
+    res.json({ todayCount })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/activities/admin
 // Admin: view all employee activity with optional filters. Paginated.
 // Query: userId, customer, from, to, limit, page

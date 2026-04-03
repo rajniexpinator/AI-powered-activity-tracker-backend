@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { protectRoute } from '../middleware/auth.js'
+import { protectRoute, requireRole } from '../middleware/auth.js'
 import { BarcodeMapping } from '../models/BarcodeMapping.js'
 import { createChatCompletion, getAssistantContent, isOpenAIAvailable } from '../services/openai.js'
 
@@ -110,6 +110,72 @@ router.post('/clarify', protectRoute, async (req, res, next) => {
             createdAt: mapping.createdAt,
           }
         : null,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/barcodes/admin — admin: paginated report of all barcode / QR mappings
+// Query: q (search barcode, customer, part fields), limit, page
+router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
+    const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 20 : rawLimit, 1), 100)
+    const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
+    const skip = (page - 1) * limit
+
+    const qRaw = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+    const filter = {}
+    if (qRaw) {
+      const esc = qRaw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const re = new RegExp(esc, 'i')
+      filter.$or = [
+        { barcode: re },
+        { customer: re },
+        { partName: re },
+        { partNumber: re },
+        { productName: re },
+      ]
+    }
+
+    const [mappings, total] = await Promise.all([
+      BarcodeMapping.find(filter)
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('lastScannedBy', 'name email')
+        .lean(),
+      BarcodeMapping.countDocuments(filter),
+    ])
+
+    const totalPages = Math.ceil(total / limit) || 1
+
+    res.json({
+      mappings: mappings.map((m) => ({
+        _id: m._id,
+        barcode: m.barcode,
+        partName: m.partName || m.productName,
+        partNumber: m.partNumber,
+        productName: m.productName,
+        customer: m.customer,
+        scanCount: m.scanCount ?? 0,
+        metadata: m.metadata,
+        lastScannedBy: m.lastScannedBy
+          ? {
+              _id: m.lastScannedBy._id,
+              name: m.lastScannedBy.name,
+              email: m.lastScannedBy.email,
+            }
+          : null,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+      })),
+      total,
+      page,
+      limit,
+      totalPages,
     })
   } catch (err) {
     next(err)
