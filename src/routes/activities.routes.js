@@ -6,6 +6,9 @@ import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
 import { generateActivityAnswer } from '../services/activityAiAnswer.js'
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
@@ -85,6 +88,28 @@ router.get('/', protectRoute, async (req, res, next) => {
 
     const totalPages = Math.ceil(total / limit)
     res.json({ activities, total, page, limit, totalPages })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/today-count
+// Returns how many activities were created today for the logged-in user.
+router.get('/today-count', protectRoute, async (req, res, next) => {
+  try {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const end = new Date(start)
+    end.setDate(end.getDate() + 1)
+
+    const filter = {
+      userId: req.user._id,
+      isArchived: false,
+      createdAt: { $gte: start, $lt: end },
+    }
+
+    const todayCount = await Activity.countDocuments(filter)
+    res.json({ todayCount })
   } catch (err) {
     next(err)
   }
