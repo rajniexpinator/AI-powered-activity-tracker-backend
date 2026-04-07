@@ -8,6 +8,14 @@ const activitySchema = new mongoose.Schema(
     rawConversation: { type: String },
     structuredData: { type: mongoose.Schema.Types.Mixed },
     images: [{ type: String }],
+    attachments: [
+      {
+        url: { type: String, required: true },
+        name: { type: String, trim: true },
+        mime: { type: String, trim: true },
+        size: { type: Number },
+      },
+    ],
     barcodeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'BarcodeMapping' },
     isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date }

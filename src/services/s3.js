@@ -40,8 +40,12 @@ function getClient() {
  * @param {string} [folder] - Optional folder prefix (e.g. 'uploads')
  * @returns {Promise<{ key: string, url: string }>}
  */
-export async function uploadToS3(buffer, mimeType, folder = 'uploads') {
-  const ext = mimeType.split('/')[1] || 'bin'
+export async function uploadToS3(buffer, mimeType, folder = 'uploads', fileExtension = null) {
+  let ext = fileExtension
+  if (!ext || typeof ext !== 'string') {
+    ext = mimeType.split('/')[1] || 'bin'
+  }
+  ext = String(ext).replace(/[^a-zA-Z0-9]/g, '').slice(0, 16) || 'bin'
   const key = `${folder}/${randomUUID()}.${ext}`
   const client = getClient()
 

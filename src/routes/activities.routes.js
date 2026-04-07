@@ -9,13 +9,30 @@ import { generateActivityAnswer } from '../services/activityAiAnswer.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
+const MAX_ATTACHMENTS_PER_ENTRY = 10
+
+function normalizeAttachments(raw) {
+  if (!Array.isArray(raw)) return undefined
+  const out = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const url = typeof item.url === 'string' ? item.url.trim() : ''
+    if (!url) continue
+    const name = typeof item.name === 'string' ? item.name.trim().slice(0, 220) : 'file'
+    const mime = typeof item.mime === 'string' ? item.mime.trim().slice(0, 120) : ''
+    const size = typeof item.size === 'number' && item.size >= 0 ? Math.floor(item.size) : undefined
+    out.push({ url, name: name || 'file', mime, ...(size !== undefined ? { size } : {}) })
+    if (out.length >= MAX_ATTACHMENTS_PER_ENTRY) break
+  }
+  return out
+}
 
 // POST /api/activities
 // Body: { rawText: string, structured: any, images?: string[] }
 // Saves a new Activity linked to the logged-in user.
 router.post('/', protectRoute, async (req, res, next) => {
   try {
-    const { rawText, structured, images } = req.body || {}
+    const { rawText, structured, images, attachments } = req.body || {}
 
     if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
       return res.status(400).json({ error: 'rawText is required and must be a non-empty string' })
@@ -51,6 +68,15 @@ router.post('/', protectRoute, async (req, res, next) => {
           .json({ error: `A maximum of ${MAX_IMAGES_PER_ENTRY} images is allowed per activity.` })
       }
       activityPayload.images = cleanedImages
+    }
+
+    if (Array.isArray(attachments)) {
+      if (attachments.length > MAX_ATTACHMENTS_PER_ENTRY) {
+        return res
+          .status(400)
+          .json({ error: `A maximum of ${MAX_ATTACHMENTS_PER_ENTRY} attachments is allowed per activity.` })
+      }
+      activityPayload.attachments = normalizeAttachments(attachments) ?? []
     }
 
     const activity = await Activity.create(activityPayload)
@@ -437,13 +463,16 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
       return res.status(403).json({ error: 'Forbidden — you cannot edit this activity' })
     }
 
-    const { rawText, structured, images } = req.body || {}
+    const { rawText, structured, images, attachments } = req.body || {}
     const hasRawText = typeof rawText === 'string'
     const hasStructured = structured && typeof structured === 'object'
     const hasImages = Array.isArray(images)
+    const hasAttachments = Array.isArray(attachments)
 
-    if (!hasRawText && !hasStructured && !hasImages) {
-      return res.status(400).json({ error: 'Provide at least one field to update: rawText, structured, or images' })
+    if (!hasRawText && !hasStructured && !hasImages && !hasAttachments) {
+      return res
+        .status(400)
+        .json({ error: 'Provide at least one field to update: rawText, structured, images, or attachments' })
     }
 
     if (hasRawText) {
@@ -480,6 +509,15 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
           .json({ error: `A maximum of ${MAX_IMAGES_PER_ENTRY} images is allowed per activity.` })
       }
       activity.images = cleanedImages
+    }
+
+    if (hasAttachments) {
+      if (attachments.length > MAX_ATTACHMENTS_PER_ENTRY) {
+        return res
+          .status(400)
+          .json({ error: `A maximum of ${MAX_ATTACHMENTS_PER_ENTRY} attachments is allowed per activity.` })
+      }
+      activity.attachments = normalizeAttachments(attachments) ?? []
     }
 
     await activity.save()

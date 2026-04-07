@@ -3,12 +3,13 @@ import path from 'path'
 import fs from 'fs/promises'
 import { randomUUID } from 'crypto'
 import { protectRoute } from '../middleware/auth.js'
-import { uploadSingleImage } from '../middleware/upload.js'
+import { uploadSingleImage, uploadSingleAttachment } from '../middleware/upload.js'
 import { isS3Configured, uploadToS3 } from '../services/s3.js'
 
 const router = Router()
 
 const UPLOADS_IMAGES_DIR = path.join(process.cwd(), 'uploads', 'images')
+const UPLOADS_ATTACHMENTS_DIR = path.join(process.cwd(), 'uploads', 'attachments')
 
 function extFromMime(mime) {
   const map = {
@@ -40,6 +41,14 @@ function publicUploadFileUrl(req, filename) {
   const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim()
   const host = (req.get('x-forwarded-host') || req.get('host') || 'localhost').split(',')[0].trim()
   return `${proto}://${host}/uploads/images/${filename}`
+}
+
+function publicAttachmentFileUrl(req, filename) {
+  const configured = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '')
+  if (configured) return `${configured}/uploads/attachments/${filename}`
+  const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim()
+  const host = (req.get('x-forwarded-host') || req.get('host') || 'localhost').split(',')[0].trim()
+  return `${proto}://${host}/uploads/attachments/${filename}`
 }
 
 // POST /api/upload — single image upload (multipart/form-data, field name: image)
@@ -79,6 +88,66 @@ router.post('/', protectRoute, (req, res, next) => {
     await fs.writeFile(dest, req.file.buffer)
     const url = publicUploadFileUrl(req, filename)
     res.status(201).json({ key: `local/${filename}`, url })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/upload/attachment — PDF, Office, CSV, ZIP, video, etc. (multipart field name: file)
+router.post('/attachment', protectRoute, (req, res, next) => {
+  uploadSingleAttachment(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Maximum attachment size is 50 MB.' })
+      }
+      if (err.message && err.message.startsWith('Invalid attachment type')) {
+        return res.status(400).json({ error: err.message })
+      }
+      return next(err)
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded. Use field name "file".' })
+    }
+    next()
+  })
+}, async (req, res, next) => {
+  try {
+    const originalNameRaw = req.file.originalname || 'file'
+    const safeBase = path.basename(originalNameRaw).replace(/[^\w.\- ()+\[\]]+/g, '_').slice(0, 180)
+    const extFromName = (extFromOriginalName(safeBase) || extFromMime(req.file.mimetype) || 'bin').replace(
+      /[^a-zA-Z0-9]/g,
+      ''
+    )
+
+    if (isS3Configured()) {
+      const { key, url } = await uploadToS3(
+        req.file.buffer,
+        req.file.mimetype,
+        'activity-tracker/attachments',
+        extFromName || 'bin'
+      )
+      return res.status(201).json({
+        key,
+        url,
+        name: safeBase,
+        mime: req.file.mimetype,
+        size: req.file.size,
+      })
+    }
+
+    await fs.mkdir(UPLOADS_ATTACHMENTS_DIR, { recursive: true })
+    const ext = extFromOriginalName(safeBase) || extFromMime(req.file.mimetype) || 'bin'
+    const filename = `${randomUUID()}.${ext}`
+    const dest = path.join(UPLOADS_ATTACHMENTS_DIR, filename)
+    await fs.writeFile(dest, req.file.buffer)
+    const url = publicAttachmentFileUrl(req, filename)
+    res.status(201).json({
+      key: `local/attachments/${filename}`,
+      url,
+      name: safeBase,
+      mime: req.file.mimetype,
+      size: req.file.size,
+    })
   } catch (err) {
     next(err)
   }
