@@ -349,6 +349,26 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
   }
 })
 
+// GET /api/activities/admin/:id
+// Admin-only detail endpoint that can return archived activities too.
+router.get('/admin/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { id } = req.params
+    if (!id) {
+      return res.status(400).json({ error: 'Activity id is required' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+    if (!activity) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    res.json({ activity })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // POST /api/activities/:id/restore
 router.post('/:id/restore', protectRoute, async (req, res, next) => {
   try {
