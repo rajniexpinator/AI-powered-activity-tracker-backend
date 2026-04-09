@@ -6,10 +6,81 @@ import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
 import { generateActivityAnswer } from '../services/activityAiAnswer.js'
+import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
+import {
+  addDays,
+  buildWeeklyActivityExcelBuffer,
+  enumerateWeekMondays,
+  getMondayOfWeekContaining,
+  groupActivitiesByCustomer,
+} from '../services/weeklyActivityExcel.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
 const MAX_ATTACHMENTS_PER_ENTRY = 10
+const MAX_MS365_ATTACHMENT_BYTES = 3 * 1024 * 1024
+
+function normalizeEmailList(value) {
+  if (!value) return []
+  const arr = Array.isArray(value) ? value : [value]
+  return arr
+    .filter((v) => typeof v === 'string')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function sanitizeFilename(name, fallback = 'attachment') {
+  if (typeof name !== 'string') return fallback
+  const cleaned = name
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 160)
+  return cleaned || fallback
+}
+
+function filenameFromUrl(rawUrl, fallback = 'attachment') {
+  try {
+    const u = new URL(rawUrl)
+    const decoded = decodeURIComponent(u.pathname.split('/').pop() || '')
+    return sanitizeFilename(decoded || fallback, fallback)
+  } catch {
+    return fallback
+  }
+}
+
+async function fetchRemoteAttachment({ url, fallbackName, preferredName, preferredMime }) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Download failed (${response.status})`)
+  }
+
+  const contentType = (
+    (typeof preferredMime === 'string' && preferredMime.trim()) ||
+    response.headers.get('content-type') ||
+    'application/octet-stream'
+  ).split(';')[0]
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (buffer.length === 0) {
+    throw new Error('Downloaded file is empty')
+  }
+  if (buffer.length > MAX_MS365_ATTACHMENT_BYTES) {
+    throw new Error(
+      `File exceeds ${Math.floor(MAX_MS365_ATTACHMENT_BYTES / (1024 * 1024))} MB attachment limit for Microsoft 365 draft API`
+    )
+  }
+
+  const name =
+    sanitizeFilename(preferredName || '', '') ||
+    sanitizeFilename(filenameFromUrl(url, fallbackName), fallbackName)
+
+  return {
+    name,
+    contentType,
+    contentBytesBase64: buffer.toString('base64'),
+  }
+}
 
 function normalizeAttachments(raw) {
   if (!Array.isArray(raw)) return undefined
@@ -298,6 +369,109 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader('Content-Disposition', 'attachment; filename="activities-export.csv"')
     res.send(csv)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/admin/export/weekly-xlsx
+// Admin: timesheet-style Excel — one worksheet per customer.
+// When both from & to are set: same window as AI weekly report (multi-week = stacked week blocks per tab).
+// Otherwise: single calendar week containing weekEnd (or to, or from, or today).
+// Query: userId, customer, from, to, archived, weekEnd, program | vehicleProgram
+router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const { userId, customer, from, to } = req.query
+    const includeArchived = req.query.archived === 'true'
+    const programOverride =
+      (typeof req.query.program === 'string' && req.query.program.trim()) ||
+      (typeof req.query.vehicleProgram === 'string' && req.query.vehicleProgram.trim()) ||
+      ''
+
+    const filter = { isArchived: includeArchived }
+
+    if (typeof userId === 'string' && userId) {
+      filter.userId = userId
+    }
+
+    if (typeof customer === 'string' && customer.trim()) {
+      filter.customer = customer.trim()
+    }
+
+    const hasFrom = typeof from === 'string' && from.trim()
+    const hasTo = typeof to === 'string' && to.trim()
+    let weekMondays
+    let periodSummary
+    let fnameStem
+
+    if (hasFrom && hasTo) {
+      const fromDate = new Date(from)
+      const toDate = new Date(to)
+      if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+        return res.status(400).json({ error: 'Invalid from or to date' })
+      }
+      fromDate.setHours(0, 0, 0, 0)
+      toDate.setHours(23, 59, 59, 999)
+      filter.createdAt = { $gte: fromDate, $lte: toDate }
+      weekMondays = enumerateWeekMondays(fromDate, toDate)
+      if (weekMondays.length === 0) {
+        weekMondays = [getMondayOfWeekContaining(fromDate)]
+      }
+      periodSummary = `Reporting period: ${String(from).slice(0, 10)} to ${String(to).slice(0, 10)} — same filters as Generate weekly AI report.`
+      fnameStem = `${String(from).slice(0, 10)}_to_${String(to).slice(0, 10)}`
+    } else {
+      const rawWeekEnd =
+        typeof req.query.weekEnd === 'string' && req.query.weekEnd.trim()
+          ? req.query.weekEnd.trim()
+          : hasTo
+            ? to
+            : hasFrom
+              ? from
+              : null
+
+      const anchor = rawWeekEnd ? new Date(rawWeekEnd) : new Date()
+      if (Number.isNaN(anchor.getTime())) {
+        return res.status(400).json({ error: 'Invalid weekEnd — use YYYY-MM-DD' })
+      }
+      anchor.setHours(12, 0, 0, 0)
+
+      const weekMonday = getMondayOfWeekContaining(anchor)
+      const weekSundayEnd = addDays(weekMonday, 6)
+      weekSundayEnd.setHours(23, 59, 59, 999)
+
+      filter.createdAt = { $gte: weekMonday, $lte: weekSundayEnd }
+      weekMondays = [weekMonday]
+      periodSummary = `Single week (Mon–Sun) containing ${String(rawWeekEnd || anchor.toISOString().slice(0, 10)).slice(0, 10)}.`
+      fnameStem = weekMonday.toISOString().slice(0, 10)
+    }
+
+    const activities = await Activity.find(filter)
+      .sort({ createdAt: 1 })
+      .populate('userId', 'name email role')
+      .select({
+        customer: 1,
+        summary: 1,
+        rawConversation: 1,
+        createdAt: 1,
+        isArchived: 1,
+        userId: 1,
+        structuredData: 1,
+      })
+      .lean()
+
+    const byCustomer = groupActivitiesByCustomer(activities)
+
+    const buffer = await buildWeeklyActivityExcelBuffer({
+      byCustomer,
+      weekMondays,
+      program: programOverride,
+      periodSummary,
+    })
+
+    const fname = `weekly-activity-report-${fnameStem}.xlsx`
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`)
+    res.send(buffer)
   } catch (err) {
     next(err)
   }
@@ -651,6 +825,138 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
     })
 
     res.json({ report, reportId: saved._id })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/:id/send-email
+// Sends one activity log by email, including images/files as message attachments.
+router.post('/:id/send-email', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    if (!id) return res.status(400).json({ error: 'Activity id is required' })
+    if (!isMsGraphConfigured()) {
+      return res.status(503).json({ error: 'Microsoft 365 mail is not configured on the server' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    const isOwner = String(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden — you cannot email this activity' })
+    }
+
+    const body = req.body || {}
+    const providedTo = normalizeEmailList(body.to)
+    const providedCc = normalizeEmailList(body.cc)
+    let recipientTo = [...providedTo]
+
+    if (recipientTo.length === 0 && typeof activity.customer === 'string' && activity.customer.trim()) {
+      const byCustomer = await Customer.findOne({
+        name: { $regex: `^${activity.customer.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      })
+        .select('email')
+        .lean()
+      if (byCustomer?.email) recipientTo.push(String(byCustomer.email).trim().toLowerCase())
+    }
+
+    if (recipientTo.length === 0 && typeof req.user.email === 'string' && req.user.email.trim()) {
+      recipientTo.push(req.user.email.trim().toLowerCase())
+    }
+    recipientTo = [...new Set(recipientTo)]
+
+    if (recipientTo.length === 0) {
+      return res
+        .status(400)
+        .json({ error: 'No recipients available. Add a customer email (or pass to[] in the request).' })
+    }
+
+    const createdLabel = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown date'
+    const safeCustomer = typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Unknown customer'
+    const safeSummary = typeof activity.summary === 'string' && activity.summary.trim() ? activity.summary.trim() : 'No summary'
+    const rawText =
+      typeof activity.rawConversation === 'string' && activity.rawConversation.trim()
+        ? activity.rawConversation.trim()
+        : ''
+
+    const images = Array.isArray(activity.images) ? activity.images.filter((u) => typeof u === 'string' && u.trim()) : []
+    const files = Array.isArray(activity.attachments) ? activity.attachments : []
+    const allSources = [
+      ...images.map((url, idx) => ({ url, fallbackName: `activity-image-${idx + 1}.jpg` })),
+      ...files.map((a, idx) => ({
+        url: a?.url,
+        fallbackName: `activity-file-${idx + 1}`,
+        preferredName: a?.name,
+        preferredMime: a?.mime,
+      })),
+    ].filter((x) => typeof x.url === 'string' && x.url.trim())
+
+    const preparedAttachments = []
+    const skipped = []
+    for (const source of allSources) {
+      try {
+        const prepared = await fetchRemoteAttachment({
+          url: source.url,
+          fallbackName: source.fallbackName,
+          preferredName: source.preferredName,
+          preferredMime: source.preferredMime,
+        })
+        preparedAttachments.push(prepared)
+      } catch (err) {
+        skipped.push({
+          url: source.url,
+          reason: err instanceof Error ? err.message : 'Failed to download attachment',
+        })
+      }
+    }
+
+    const skippedText =
+      skipped.length > 0
+        ? `\n\nSkipped attachments (${skipped.length}):\n${skipped.map((s) => `- ${s.url} (${s.reason})`).join('\n')}`
+        : ''
+
+    const textBody = [
+      `Activity log export`,
+      ``,
+      `Customer: ${safeCustomer}`,
+      `Created: ${createdLabel}`,
+      `Summary: ${safeSummary}`,
+      ``,
+      `Raw notes:`,
+      rawText || '(none)',
+      ``,
+      `Attached in this email: ${preparedAttachments.length}`,
+      `Source links captured in log: ${allSources.length}`,
+      skippedText,
+    ].join('\n')
+
+    const subject =
+      typeof body.subject === 'string' && body.subject.trim()
+        ? body.subject.trim()
+        : `AI log - ${safeCustomer} - ${new Date(activity.createdAt || Date.now()).toISOString().slice(0, 10)}`
+
+    const draft = await createMs365Draft({
+      to: recipientTo,
+      cc: providedCc,
+      subject,
+      text: textBody,
+      attachments: preparedAttachments,
+    })
+    await sendMs365Draft({ messageId: draft.id })
+
+    res.json({
+      success: true,
+      to: recipientTo,
+      cc: providedCc,
+      attachedCount: preparedAttachments.length,
+      sourceCount: allSources.length,
+      skipped,
+    })
   } catch (err) {
     next(err)
   }
