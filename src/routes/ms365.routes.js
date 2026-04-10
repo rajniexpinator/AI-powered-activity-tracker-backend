@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { isDbConnected } from '../config/db.js'
 import { Ms365RecipientConfig } from '../models/Ms365RecipientConfig.js'
+import { getDefaultMs365Recipients } from '../services/ms365Recipients.js'
 import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
 import { createChatCompletion, getAssistantContent } from '../services/openai.js'
 import { Report } from '../models/Report.js'
@@ -14,17 +15,12 @@ function normalizeEmailList(value) {
   const arr = Array.isArray(value) ? value : [value]
   return arr
     .filter((v) => typeof v === 'string')
-    .map((v) => v.trim())
+    .map((v) => v.trim().toLowerCase())
     .filter(Boolean)
 }
 
 async function getDefaultRecipients() {
-  if (!isDbConnected()) return { to: [], cc: [] }
-  const doc = await Ms365RecipientConfig.findOne({ key: 'default' }).lean()
-  return {
-    to: normalizeEmailList(doc?.to),
-    cc: normalizeEmailList(doc?.cc),
-  }
+  return getDefaultMs365Recipients()
 }
 
 router.get('/status', protectRoute, requireRole('admin'), async (_req, res) => {

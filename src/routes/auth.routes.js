@@ -146,6 +146,30 @@ router.patch('/me', protectRoute, async (req, res, next) => {
   }
 })
 
+// GET /api/auth/coworkers — active users for sharing logs (any authenticated user)
+router.get('/coworkers', protectRoute, async (req, res, next) => {
+  try {
+    const users = await User.find({
+      isActive: true,
+      _id: { $ne: req.user._id },
+    })
+      .select('name email role')
+      .sort({ name: 1, email: 1 })
+      .limit(300)
+      .lean()
+    res.json({
+      users: users.map((u) => ({
+        id: u._id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+      })),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/auth/users — list users (admin only)
 router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next) => {
   try {

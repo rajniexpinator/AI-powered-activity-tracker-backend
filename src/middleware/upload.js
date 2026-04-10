@@ -56,6 +56,8 @@ const ATTACHMENT_MIMES = new Set([
   'video/webm',
   'audio/mpeg',
   'audio/mp4',
+  'application/rtf',
+  'text/rtf',
 ])
 
 const ATTACHMENT_EXT = new Set([
@@ -74,6 +76,7 @@ const ATTACHMENT_EXT = new Set([
   '.json',
   '.xml',
   '.dat',
+  '.rtf',
 ])
 
 function attachmentFileFilter(req, file, cb) {
@@ -87,7 +90,7 @@ function attachmentFileFilter(req, file, cb) {
   }
   cb(
     new Error(
-      'Invalid attachment type. Allowed: PDF, Word, Excel, CSV, TXT, ZIP, JSON/XML/DAT, MP4/MOV/WebM.'
+      'Invalid attachment type. Allowed: PDF, Word, Excel, CSV, TXT, RTF, ZIP, JSON/XML/DAT, MP4/MOV/WebM.'
     ),
     false
   )

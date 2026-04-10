@@ -1,7 +1,10 @@
 import { Router } from 'express'
+import mongoose from 'mongoose'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { Activity } from '../models/Activity.js'
 import { Customer } from '../models/Customer.js'
+import { User } from '../models/User.js'
+import { getDefaultMs365Recipients } from '../services/ms365Recipients.js'
 import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
@@ -19,6 +22,29 @@ const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
 const MAX_ATTACHMENTS_PER_ENTRY = 10
 const MAX_MS365_ATTACHMENT_BYTES = 3 * 1024 * 1024
+const MAX_SHARED_USERS = 30
+const MAX_COLLAB_NOTES = 200
+
+/** User id whether ref is an ObjectId, string, or populated { _id, name, ... } */
+function refToId(ref) {
+  if (ref == null) return ''
+  if (typeof ref === 'object' && ref !== null && ref._id != null) return String(ref._id)
+  return String(ref)
+}
+
+function isCollaborator(activity, user) {
+  if (!activity || !user) return false
+  const uid = String(user._id)
+  const shared = Array.isArray(activity.sharedWith) ? activity.sharedWith : []
+  return shared.some((entry) => refToId(entry) === uid)
+}
+
+function canViewActivity(activity, user) {
+  if (!activity || activity.isArchived) return false
+  if (user.role === 'admin') return true
+  if (refToId(activity.userId) === String(user._id)) return true
+  return isCollaborator(activity, user)
+}
 
 function normalizeEmailList(value) {
   if (!value) return []
@@ -169,16 +195,28 @@ router.get('/', protectRoute, async (req, res, next) => {
     const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
     const skip = (page - 1) * limit
 
-    const filter = { userId: req.user._id, isArchived: false }
-    const [activities, total] = await Promise.all([
+    const uid = req.user._id
+    const filter = {
+      isArchived: false,
+      $or: [{ userId: uid }, { sharedWith: uid }],
+    }
+    const [rows, total] = await Promise.all([
       Activity.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select({ customer: 1, summary: 1, createdAt: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
+
+    const activities = rows.map((a) => ({
+      _id: a._id,
+      customer: a.customer,
+      summary: a.summary,
+      createdAt: a.createdAt,
+      isOwner: String(a.userId) === String(uid),
+    }))
 
     const totalPages = Math.ceil(total / limit)
     res.json({ activities, total, page, limit, totalPages })
@@ -554,7 +592,7 @@ router.post('/:id/restore', protectRoute, async (req, res, next) => {
       return res.status(404).json({ error: 'Activity not found or not archived' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
+    const isOwner = refToId(activity.userId) === String(req.user._id)
     const isAdmin = req.user.role === 'admin'
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden — you cannot restore this activity' })
@@ -585,7 +623,7 @@ router.post('/:id/archive', protectRoute, async (req, res, next) => {
       return res.status(404).json({ error: 'Activity not found' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
+    const isOwner = refToId(activity.userId) === String(req.user._id)
     const isAdmin = req.user.role === 'admin'
 
     if (!isOwner && !isAdmin) {
@@ -597,6 +635,123 @@ router.post('/:id/archive', protectRoute, async (req, res, next) => {
     await activity.save()
 
     res.json({ success: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /api/activities/:id/share
+// Owner or admin: set which coworkers can view and comment on this log.
+router.patch('/:id/share', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { sharedWithUserIds } = req.body || {}
+    if (!id) return res.status(400).json({ error: 'Activity id is required' })
+    if (!Array.isArray(sharedWithUserIds)) {
+      return res.status(400).json({ error: 'sharedWithUserIds must be an array' })
+    }
+
+    const activity = await Activity.findById(id)
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    const isOwner = refToId(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Forbidden — only the log owner can update sharing' })
+    }
+
+    const unique = [
+      ...new Set(
+        sharedWithUserIds
+          .filter((x) => typeof x === 'string' && x.trim())
+          .map((x) => x.trim())
+      ),
+    ]
+    if (unique.length > MAX_SHARED_USERS) {
+      return res.status(400).json({ error: `You can share with at most ${MAX_SHARED_USERS} coworkers.` })
+    }
+
+    const validIds = unique.filter((x) => mongoose.Types.ObjectId.isValid(x)).map((x) => new mongoose.Types.ObjectId(x))
+    const ownerId = refToId(activity.userId)
+    const candidateIds = validIds.filter((oid) => String(oid) !== ownerId)
+
+    const activeUsers = await User.find({
+      _id: { $in: candidateIds },
+      isActive: true,
+    })
+      .select('_id')
+      .lean()
+
+    activity.sharedWith = activeUsers.map((u) => u._id)
+    await activity.save()
+
+    const populated = await Activity.findById(activity._id)
+      .populate('sharedWith', 'name email role')
+      .populate('userId', 'name email role')
+      .lean()
+
+    res.json({ activity: populated })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/activities/:id/notes
+// Owner, admin, or anyone in sharedWith can append a collaboration note.
+router.post('/:id/notes', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { text } = req.body || {}
+    if (!id) return res.status(400).json({ error: 'Activity id is required' })
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'text is required' })
+    }
+    const safeText = text.trim()
+    if (safeText.length > 12000) {
+      return res.status(400).json({ error: 'Note is too long' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+
+    if (!canViewActivity(activity, req.user)) {
+      return res.status(403).json({ error: 'Forbidden — you cannot access this activity' })
+    }
+
+    const isOwner = refToId(activity.userId) === String(req.user._id)
+    const isAdmin = req.user.role === 'admin'
+    if (!isOwner && !isAdmin && !isCollaborator(activity, req.user)) {
+      return res.status(403).json({ error: 'Forbidden — only collaborators can add notes on this log' })
+    }
+
+    const n = Array.isArray(activity.collaborationNotes) ? activity.collaborationNotes.length : 0
+    if (n >= MAX_COLLAB_NOTES) {
+      return res.status(400).json({ error: 'Maximum notes on this log reached' })
+    }
+
+    const updated = await Activity.findByIdAndUpdate(
+      id,
+      {
+        $push: {
+          collaborationNotes: {
+            userId: req.user._id,
+            text: safeText,
+            createdAt: new Date(),
+          },
+        },
+      },
+      { new: true }
+    )
+      .populate('collaborationNotes.userId', 'name email role')
+      .populate('sharedWith', 'name email role')
+      .populate('userId', 'name email role')
+      .lean()
+
+    res.json({ activity: updated })
   } catch (err) {
     next(err)
   }
@@ -622,7 +777,7 @@ router.delete('/:id', protectRoute, async (req, res, next) => {
       return res.status(400).json({ error: 'Only archived activities can be permanently deleted' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
+    const isOwner = refToId(activity.userId) === String(req.user._id)
     const isPrivileged = ['admin'].includes(req.user.role)
 
     if (!isOwner && !isPrivileged) {
@@ -651,7 +806,7 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
       return res.status(404).json({ error: 'Activity not found' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
+    const isOwner = refToId(activity.userId) === String(req.user._id)
     const isAdmin = req.user.role === 'admin'
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden — you cannot edit this activity' })
@@ -845,25 +1000,61 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
       return res.status(404).json({ error: 'Activity not found' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
-    if (!isOwner && !isAdmin) {
+    if (!canViewActivity(activity, req.user)) {
       return res.status(403).json({ error: 'Forbidden — you cannot email this activity' })
     }
 
     const body = req.body || {}
     const providedTo = normalizeEmailList(body.to)
     const providedCc = normalizeEmailList(body.cc)
+    const defaults = await getDefaultMs365Recipients()
+
     let recipientTo = [...providedTo]
 
-    if (recipientTo.length === 0 && typeof activity.customer === 'string' && activity.customer.trim()) {
+    const activityCustomerName =
+      typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : ''
+
+    if (activityCustomerName) {
       const byCustomer = await Customer.findOne({
-        name: { $regex: `^${activity.customer.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+        name: {
+          $regex: `^${activityCustomerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          $options: 'i',
+        },
       })
         .select('email')
         .lean()
-      if (byCustomer?.email) recipientTo.push(String(byCustomer.email).trim().toLowerCase())
+
+      if (!byCustomer) {
+        return res.status(400).json({
+          error:
+            'Cannot send email: this log\'s customer is not linked in your directory. Add the customer under Customers or correct the name on this log.',
+        })
+      }
+
+      const custEmail =
+        typeof byCustomer.email === 'string' && byCustomer.email.trim()
+          ? byCustomer.email.trim().toLowerCase()
+          : ''
+      if (!custEmail) {
+        return res.status(400).json({
+          error:
+            'Cannot send email: no email is linked to this customer. Add an email for this customer in Customers, then try again.',
+        })
+      }
+
+      if (!recipientTo.includes(custEmail)) recipientTo.push(custEmail)
     }
+
+    for (const e of defaults.to) {
+      if (e && !recipientTo.includes(e)) recipientTo.push(e)
+    }
+    recipientTo = [...new Set(recipientTo)]
+
+    let ccMerged = [...providedCc]
+    for (const e of defaults.cc) {
+      if (e && !ccMerged.includes(e)) ccMerged.push(e)
+    }
+    ccMerged = [...new Set(ccMerged)]
 
     if (recipientTo.length === 0 && typeof req.user.email === 'string' && req.user.email.trim()) {
       recipientTo.push(req.user.email.trim().toLowerCase())
@@ -873,7 +1064,10 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
     if (recipientTo.length === 0) {
       return res
         .status(400)
-        .json({ error: 'No recipients available. Add a customer email (or pass to[] in the request).' })
+        .json({
+          error:
+            'No recipients available. Set a customer email, configure default recipients (admin), or pass to[] in the request.',
+        })
     }
 
     const createdLabel = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown date'
@@ -942,7 +1136,7 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
 
     const draft = await createMs365Draft({
       to: recipientTo,
-      cc: providedCc,
+      cc: ccMerged,
       subject,
       text: textBody,
       attachments: preparedAttachments,
@@ -952,7 +1146,7 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
     res.json({
       success: true,
       to: recipientTo,
-      cc: providedCc,
+      cc: ccMerged,
       attachedCount: preparedAttachments.length,
       sourceCount: allSources.length,
       skipped,
@@ -972,16 +1166,17 @@ router.get('/:id', protectRoute, async (req, res, next) => {
       return res.status(400).json({ error: 'Activity id is required' })
     }
 
-    const activity = await Activity.findById(id).lean()
+    const activity = await Activity.findById(id)
+      .populate('userId', 'name email role')
+      .populate('sharedWith', 'name email role')
+      .populate('collaborationNotes.userId', 'name email role')
+      .lean()
 
     if (!activity || activity.isArchived) {
       return res.status(404).json({ error: 'Activity not found' })
     }
 
-    const isOwner = String(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
-
-    if (!isOwner && !isAdmin) {
+    if (!canViewActivity(activity, req.user)) {
       return res.status(403).json({ error: 'Forbidden — you cannot view this activity' })
     }
 

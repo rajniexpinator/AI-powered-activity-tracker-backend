@@ -18,7 +18,15 @@ const activitySchema = new mongoose.Schema(
     ],
     barcodeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'BarcodeMapping' },
     isArchived: { type: Boolean, default: false },
-    archivedAt: { type: Date }
+    archivedAt: { type: Date },
+    sharedWith: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    collaborationNotes: [
+      {
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        text: { type: String, required: true, maxlength: 12000 },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 )
@@ -26,5 +34,6 @@ const activitySchema = new mongoose.Schema(
 activitySchema.index({ userId: 1, createdAt: -1 })
 activitySchema.index({ customer: 1 })
 activitySchema.index({ isArchived: 1 })
+activitySchema.index({ sharedWith: 1, isArchived: 1 })
 
 export const Activity = mongoose.model('Activity', activitySchema)
