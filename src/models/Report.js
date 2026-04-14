@@ -13,6 +13,10 @@ const reportSchema = new mongoose.Schema(
 
     includeCustomerSummaries: { type: Boolean, default: false },
 
+    /** Issue severity filter used when generating (structuredData.severity 1–3). */
+    issueSeverityExact: { type: Number, min: 1, max: 3 },
+    issueSeverityMin: { type: Number, min: 1, max: 3 },
+
     // Output
     content: { type: String, required: true },
     model: { type: String, default: 'gpt-4o-mini' },

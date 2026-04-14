@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { randomUUID } from 'crypto'
 
 const accessKeyId = process.env.AWS_ACCESS_KEY_ID
@@ -62,4 +63,31 @@ export async function uploadToS3(buffer, mimeType, folder = 'uploads', fileExten
     ? `${customEndpoint.replace(/\/$/, '')}/${bucket}/${key}`
     : `https://${bucket}.s3.${region}.amazonaws.com/${key}`
   return { key, url }
+}
+
+/**
+ * @param {string} key - S3 object key
+ * @param {number} [expiresIn] - seconds (default 3600)
+ * @returns {Promise<string>}
+ */
+export async function getPresignedDownloadUrl(key, expiresIn = 3600) {
+  const client = getClient()
+  const command = new GetObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET,
+    Key: key,
+  })
+  return getSignedUrl(client, command, { expiresIn })
+}
+
+/**
+ * @param {string} key - S3 object key
+ */
+export async function deleteFromS3(key) {
+  const client = getClient()
+  await client.send(
+    new DeleteObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET,
+      Key: key,
+    })
+  )
 }

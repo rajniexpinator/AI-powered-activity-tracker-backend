@@ -86,6 +86,13 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
 
     const imageGallery = buildReportImageGallery(activities)
 
+    let issueSeverityExact
+    let issueSeverityMin
+    const sevRaw = severity != null && severity !== '' ? parseInt(String(severity).trim(), 10) : NaN
+    if (!Number.isNaN(sevRaw) && sevRaw >= 1 && sevRaw <= 3) issueSeverityExact = sevRaw
+    const minSevRaw = minSeverity != null && minSeverity !== '' ? parseInt(String(minSeverity).trim(), 10) : NaN
+    if (!Number.isNaN(minSevRaw) && minSevRaw >= 1 && minSevRaw <= 3) issueSeverityMin = minSevRaw
+
     const saved = await Report.create({
       createdBy: req.user._id,
       scopeRole: req.user.role,
@@ -94,6 +101,8 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       from: fromDate,
       to: toDate,
       includeCustomerSummaries: Boolean(includeCustomerSummaries),
+      issueSeverityExact,
+      issueSeverityMin,
       content: report,
       model: 'gpt-4o-mini',
       activityCount: activities.length,

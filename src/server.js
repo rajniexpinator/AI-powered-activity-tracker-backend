@@ -26,6 +26,10 @@ app.use('/health', healthRouter)
 // Public URLs returned by POST /api/upload (local disk fallback) point here.
 app.use('/uploads/images', express.static(path.join(process.cwd(), 'uploads', 'images')))
 app.use('/uploads/attachments', express.static(path.join(process.cwd(), 'uploads', 'attachments')))
+// HR / employee library (People → Employee files). Separate from attachments used by AI logs / quality work.
+app.use('/uploads/internal-hr-resources', express.static(path.join(process.cwd(), 'uploads', 'internal-hr-resources')))
+// Legacy path (older uploads); safe to remove after files migrated.
+app.use('/uploads/employee-files', express.static(path.join(process.cwd(), 'uploads', 'employee-files')))
 app.use('/api', apiRouter)
 
 // 404 and error handling
