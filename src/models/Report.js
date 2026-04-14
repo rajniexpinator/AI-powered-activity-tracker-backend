@@ -17,6 +17,17 @@ const reportSchema = new mongoose.Schema(
     content: { type: String, required: true },
     model: { type: String, default: 'gpt-4o-mini' },
 
+    // Thumbnails: photos from included activities (https URLs only), for Reports UI and PDF attachment
+    imageGallery: [
+      {
+        activityId: { type: mongoose.Schema.Types.ObjectId },
+        customer: { type: String, default: '' },
+        summary: { type: String, default: '' },
+        createdAt: { type: Date },
+        imageUrls: [{ type: String }],
+      },
+    ],
+
     // Basic stats
     activityCount: { type: Number, default: 0 },
   },

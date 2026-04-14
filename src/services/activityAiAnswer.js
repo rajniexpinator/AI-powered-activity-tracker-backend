@@ -6,6 +6,9 @@ function asText(v) {
 
 function extractActivityBits(a) {
   const structured = a?.structuredData && typeof a.structuredData === 'object' ? a.structuredData : {}
+  const rawSev = structured.severity
+  const n = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
+  const severity = n === 1 || n === 2 || n === 3 ? n : null
   return {
     customer: asText(a.customer) || asText(structured.customer) || 'Unknown',
     createdAt: a?.createdAt ? String(a.createdAt) : '',
@@ -16,6 +19,7 @@ function extractActivityBits(a) {
     nextActions: Array.isArray(structured.next_actions) ? structured.next_actions.map(asText).filter(Boolean) : [],
     part: asText(structured.part_name) || asText(structured.part) || '',
     intent: asText(structured.intent) || '',
+    severity,
   }
 }
 
@@ -70,6 +74,7 @@ ${payload
     if (a.resolution) parts.push(`   Resolution/Outcome: ${a.resolution}`)
     if (a.nextActions?.length) parts.push(`   Next actions: ${a.nextActions.join('; ')}`)
     if (a.intent) parts.push(`   Intent: ${a.intent}`)
+    if (a.severity != null) parts.push(`   Issue severity: ${a.severity}`)
     return parts.join('\n')
   })
   .join('\n\n')}

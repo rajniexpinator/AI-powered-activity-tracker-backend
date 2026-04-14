@@ -39,6 +39,9 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     const structured = a.structuredData || {}
     const customer = a.customer || structured.customer || 'Unknown'
     const barcodes = extractBarcodes(a.rawConversation)
+    const rawSev = structured.severity
+    const sevNum = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
+    const severity = sevNum === 1 || sevNum === 2 || sevNum === 3 ? sevNum : null
     return {
       createdAt: a.createdAt,
       customer,
@@ -49,6 +52,7 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
       intent: structured.intent,
       outcome: structured.outcome,
       nextActions: Array.isArray(structured.next_actions) ? structured.next_actions : [],
+      severity,
       barcodes,
     }
   })
@@ -84,6 +88,10 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     parts.push(`  Customer: ${a.customer}`)
     parts.push(`  Summary: ${a.summary}`)
     if (a.part) parts.push(`  Part: ${a.part}`)
+    if (a.severity != null) {
+      const label = a.severity === 1 ? 'low' : a.severity === 2 ? 'medium' : a.severity === 3 ? 'high' : ''
+      parts.push(`  Issue severity: ${a.severity}${label ? ` (${label})` : ''}`)
+    }
     if (Array.isArray(a.barcodes) && a.barcodes.length > 0) {
       parts.push(`  Barcodes scanned: ${a.barcodes.slice(0, 6).join(', ')}`)
     }

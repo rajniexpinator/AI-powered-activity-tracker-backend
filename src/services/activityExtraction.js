@@ -36,6 +36,7 @@ You must respond with a single JSON object that matches this schema:
   "concern_id": string | null,            // e.g. "Z1900210" or other plant concern / ticket number
   "dtc_code": string | null,              // e.g. "DTC U3000-49" if present
   "intent": string | null,                // What the Apex employee was trying to achieve
+  "severity": 1 | 2 | 3 | null,           // Issue severity for management reports: 1=low, 2=medium, 3=high (see Rules)
   "outcome": string | null,               // What was actually decided or done
   "next_actions": string[],               // List of follow-up actions, empty array if none
   "tags": string[],                       // Short keywords, e.g. ["wheel-liner", "shop", "incoming-quality", "bosch"]
@@ -49,6 +50,7 @@ You must respond with a single JSON object that matches this schema:
 
 Rules:
 - ALWAYS return valid JSON (no comments, no trailing commas).
+- "severity": Use 3 (high) only when the text clearly signals major impact (e.g. line stop, safety, recall risk, repeated customer escalation). Set 1 (low) for routine checks, minor observations, or informational visits with no significant concern. Use 2 (medium) for typical quality issues, standard follow-ups, or when impact is moderate. Use null if you cannot infer severity—the user will choose before saving.
 - If some field is unknown, use null (or [] for arrays) instead of guessing wildly.
 - Keep "tags" short and machine-friendly (lowercase, hyphen-separated).
 - Use the domain of Apex Quality Control: Apex employees are onsite at OEM plants (mainly Ford) representing suppliers.

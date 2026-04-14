@@ -3,6 +3,7 @@ import { protectRoute, requireRole } from '../middleware/auth.js'
 import { Activity } from '../models/Activity.js'
 import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
+import { buildReportImageGallery } from '../services/reportImageGallery.js'
 
 const router = Router()
 
@@ -12,7 +13,26 @@ function parseDateOrUndefined(value) {
   return Number.isNaN(d.getTime()) ? undefined : d
 }
 
-function buildActivityFilter({ userId, customer, from, to, archived }) {
+function applyStructuredSeverityFilter(filter, query) {
+  if (!query || typeof query !== 'object') return
+  let exact = NaN
+  if (typeof query.severity === 'string' && query.severity.trim()) {
+    exact = parseInt(query.severity.trim(), 10)
+  }
+  if (!Number.isNaN(exact) && exact >= 1 && exact <= 3) {
+    filter['structuredData.severity'] = exact
+    return
+  }
+  let minSev = NaN
+  if (typeof query.minSeverity === 'string' && query.minSeverity.trim()) {
+    minSev = parseInt(query.minSeverity.trim(), 10)
+  }
+  if (!Number.isNaN(minSev) && minSev >= 1 && minSev <= 3) {
+    filter['structuredData.severity'] = { $gte: minSev }
+  }
+}
+
+function buildActivityFilter({ userId, customer, from, to, archived, severity, minSeverity }) {
   const filter = { isArchived: Boolean(archived) }
   if (typeof userId === 'string' && userId) filter.userId = userId
   if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
@@ -22,13 +42,18 @@ function buildActivityFilter({ userId, customer, from, to, archived }) {
     if (to) createdAt.$lte = to
     if (Object.keys(createdAt).length > 0) filter.createdAt = createdAt
   }
+  const q =
+    severity != null || minSeverity != null
+      ? { severity: severity != null ? String(severity) : undefined, minSeverity: minSeverity != null ? String(minSeverity) : undefined }
+      : null
+  applyStructuredSeverityFilter(filter, q)
   return filter
 }
 
 
 router.post('/generate', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { userId, customer, from, to, limit, includeCustomerSummaries } = req.body || {}
+    const { userId, customer, from, to, limit, includeCustomerSummaries, severity, minSeverity } = req.body || {}
 
     const rawLimit = typeof limit === 'number' ? limit : NaN
     const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
@@ -42,13 +67,15 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       from: fromDate,
       to: toDate,
       archived: false,
+      severity: severity != null && severity !== '' ? String(severity) : undefined,
+      minSeverity: minSeverity != null && minSeverity !== '' ? String(minSeverity) : undefined,
     })
 
     const activities = await Activity.find(filter)
       .sort({ createdAt: -1 })
       .limit(max)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1 })
       .lean()
 
     const report = await generateWeeklyQualityReport(activities, {
@@ -56,6 +83,8 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       to,
       includeCustomerSummaries: Boolean(includeCustomerSummaries),
     })
+
+    const imageGallery = buildReportImageGallery(activities)
 
     const saved = await Report.create({
       createdBy: req.user._id,
@@ -68,9 +97,10 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       content: report,
       model: 'gpt-4o-mini',
       activityCount: activities.length,
+      imageGallery: imageGallery.length ? imageGallery : undefined,
     })
 
-    res.json({ report, reportId: saved._id })
+    res.json({ report, reportId: saved._id, imageGallery })
   } catch (err) {
     next(err)
   }
@@ -94,7 +124,7 @@ router.get('/', protectRoute, requireRole('admin'), async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select({ content: 0 }) // list view doesn't need full text
+        .select({ content: 0, imageGallery: 0 }) // list view: omit large fields
         .lean(),
       Report.countDocuments(filter),
     ])

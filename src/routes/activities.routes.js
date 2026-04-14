@@ -7,6 +7,7 @@ import { User } from '../models/User.js'
 import { getDefaultMs365Recipients } from '../services/ms365Recipients.js'
 import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
+import { buildReportImageGallery } from '../services/reportImageGallery.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
 import { generateActivityAnswer } from '../services/activityAiAnswer.js'
 import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
@@ -44,6 +45,26 @@ function canViewActivity(activity, user) {
   if (user.role === 'admin') return true
   if (refToId(activity.userId) === String(user._id)) return true
   return isCollaborator(activity, user)
+}
+
+/** Optional filter: structuredData.severity is 1 (low), 2 (medium), or 3 (high). Query: severity=3 or minSeverity=2 */
+function applyStructuredSeverityFilter(filter, query) {
+  if (!query || typeof query !== 'object') return
+  let exact = NaN
+  if (typeof query.severity === 'string' && query.severity.trim()) {
+    exact = parseInt(query.severity.trim(), 10)
+  }
+  if (!Number.isNaN(exact) && exact >= 1 && exact <= 3) {
+    filter['structuredData.severity'] = exact
+    return
+  }
+  let minSev = NaN
+  if (typeof query.minSeverity === 'string' && query.minSeverity.trim()) {
+    minSev = parseInt(query.minSeverity.trim(), 10)
+  }
+  if (!Number.isNaN(minSev) && minSev >= 1 && minSev <= 3) {
+    filter['structuredData.severity'] = { $gte: minSev }
+  }
 }
 
 function normalizeEmailList(value) {
@@ -249,7 +270,7 @@ router.get('/today-count', protectRoute, async (req, res, next) => {
 
 // GET /api/activities/admin
 // Admin: view all employee activity with optional filters. Paginated.
-// Query: userId, customer, from, to, limit, page
+// Query: userId, customer, from, to, limit, page, severity, minSeverity
 router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
@@ -269,6 +290,8 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
     if (typeof customer === 'string' && customer.trim()) {
       filter.customer = customer.trim()
     }
+
+    applyStructuredSeverityFilter(filter, req.query)
 
     if (typeof from === 'string' || typeof to === 'string') {
       const createdAt = {}
@@ -310,7 +333,7 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
 
 // GET /api/activities/admin/export
 // Admin/Supervisor: export filtered activity as CSV.
-// Query: userId, customer, from, to, limit, archived
+// Query: userId, customer, from, to, limit, archived, severity, minSeverity
 router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
@@ -328,6 +351,8 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
     if (typeof customer === 'string' && customer.trim()) {
       filter.customer = customer.trim()
     }
+
+    applyStructuredSeverityFilter(filter, req.query)
 
     if (typeof from === 'string' || typeof to === 'string') {
       const createdAt = {}
@@ -371,6 +396,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       'issue',
       'resolution',
       'summary',
+      'severity',
       'status',
     ]
 
@@ -388,6 +414,10 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
         structured.outcome ||
         structured.action_taken ||
         ''
+      const rawSev = structured.severity
+      const sevNum = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
+      const severity =
+        sevNum === 1 ? '1_low' : sevNum === 2 ? '2_medium' : sevNum === 3 ? '3_high' : ''
       return [
         a._id,
         a.createdAt ? new Date(a.createdAt).toISOString() : '',
@@ -398,6 +428,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
         issue,
         resolution,
         a.summary || '',
+        severity,
         a.isArchived ? 'archived' : 'active',
       ]
     })
@@ -416,7 +447,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
 // Admin: timesheet-style Excel — one worksheet per customer.
 // When both from & to are set: same window as AI weekly report (multi-week = stacked week blocks per tab).
 // Otherwise: single calendar week containing weekEnd (or to, or from, or today).
-// Query: userId, customer, from, to, archived, weekEnd, program | vehicleProgram
+// Query: userId, customer, from, to, archived, weekEnd, program | vehicleProgram, severity, minSeverity
 router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
@@ -435,6 +466,8 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
     if (typeof customer === 'string' && customer.trim()) {
       filter.customer = customer.trim()
     }
+
+    applyStructuredSeverityFilter(filter, req.query)
 
     const hasFrom = typeof from === 'string' && from.trim()
     const hasTo = typeof to === 'string' && to.trim()
@@ -516,6 +549,7 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
 })
 
 // GET /api/activities/admin/archived - must be before /:id
+// Query: userId, customer, from, to, limit, page, severity, minSeverity
 router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { userId, customer, from, to } = req.query
@@ -530,6 +564,7 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
 
     if (typeof userId === 'string' && userId) filter.userId = userId
     if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
+    applyStructuredSeverityFilter(filter, req.query)
     if (typeof from === 'string' || typeof to === 'string') {
       const createdAt = {}
       if (typeof from === 'string' && from) {
@@ -549,7 +584,7 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1, structuredData: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -957,6 +992,7 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
         isArchived: 1,
         userId: 1,
         structuredData: 1,
+        images: 1,
       })
       .lean()
 
@@ -965,6 +1001,8 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       to: plan.to || undefined,
       includeCustomerSummaries: false,
     })
+
+    const imageGallery = buildReportImageGallery(activities)
 
     const saved = await Report.create({
       createdBy: req.user._id,
@@ -977,9 +1015,10 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       content: report,
       model: 'gpt-4o-mini',
       activityCount: activities.length,
+      imageGallery: imageGallery.length ? imageGallery : undefined,
     })
 
-    res.json({ report, reportId: saved._id })
+    res.json({ report, reportId: saved._id, imageGallery })
   } catch (err) {
     next(err)
   }
@@ -1229,12 +1268,13 @@ router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (r
       .sort({ createdAt: -1 })
       .limit(max)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1 })
       .lean()
 
     const report = await generateWeeklyQualityReport(activities, { from, to })
+    const imageGallery = buildReportImageGallery(activities)
 
-    res.json({ report })
+    res.json({ report, imageGallery })
   } catch (err) {
     next(err)
   }

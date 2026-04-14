@@ -110,7 +110,11 @@ router.post('/drafts/weekly-report', protectRoute, requireRole('admin'), async (
         if (report.customer) titleParts.push(String(report.customer))
         const title = titleParts.join(' – ')
 
-        const pdf = await renderWeeklyReportPdf({ title, content: report.content })
+        const pdf = await renderWeeklyReportPdf({
+          title,
+          content: report.content,
+          imageGallery: Array.isArray(report.imageGallery) ? report.imageGallery : [],
+        })
         return [
           {
             name: 'weekly-report.pdf',
