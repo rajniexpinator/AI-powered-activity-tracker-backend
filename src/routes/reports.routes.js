@@ -19,7 +19,7 @@ function applyStructuredSeverityFilter(filter, query) {
   if (typeof query.severity === 'string' && query.severity.trim()) {
     exact = parseInt(query.severity.trim(), 10)
   }
-  if (!Number.isNaN(exact) && exact >= 1 && exact <= 3) {
+  if (!Number.isNaN(exact) && exact >= 0 && exact <= 3) {
     filter['structuredData.severity'] = exact
     return
   }
@@ -27,7 +27,7 @@ function applyStructuredSeverityFilter(filter, query) {
   if (typeof query.minSeverity === 'string' && query.minSeverity.trim()) {
     minSev = parseInt(query.minSeverity.trim(), 10)
   }
-  if (!Number.isNaN(minSev) && minSev >= 1 && minSev <= 3) {
+  if (!Number.isNaN(minSev) && minSev >= 0 && minSev <= 3) {
     filter['structuredData.severity'] = { $gte: minSev }
   }
 }
@@ -89,9 +89,9 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
     let issueSeverityExact
     let issueSeverityMin
     const sevRaw = severity != null && severity !== '' ? parseInt(String(severity).trim(), 10) : NaN
-    if (!Number.isNaN(sevRaw) && sevRaw >= 1 && sevRaw <= 3) issueSeverityExact = sevRaw
+    if (!Number.isNaN(sevRaw) && sevRaw >= 0 && sevRaw <= 3) issueSeverityExact = sevRaw
     const minSevRaw = minSeverity != null && minSeverity !== '' ? parseInt(String(minSeverity).trim(), 10) : NaN
-    if (!Number.isNaN(minSevRaw) && minSevRaw >= 1 && minSevRaw <= 3) issueSeverityMin = minSevRaw
+    if (!Number.isNaN(minSevRaw) && minSevRaw >= 0 && minSevRaw <= 3) issueSeverityMin = minSevRaw
 
     const saved = await Report.create({
       createdBy: req.user._id,

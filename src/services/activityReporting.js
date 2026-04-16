@@ -41,7 +41,7 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     const barcodes = extractBarcodes(a.rawConversation)
     const rawSev = structured.severity
     const sevNum = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
-    const severity = sevNum === 1 || sevNum === 2 || sevNum === 3 ? sevNum : null
+    const severity = sevNum === 0 || sevNum === 1 || sevNum === 2 || sevNum === 3 ? sevNum : null
     return {
       createdAt: a.createdAt,
       customer,
@@ -89,7 +89,8 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     parts.push(`  Summary: ${a.summary}`)
     if (a.part) parts.push(`  Part: ${a.part}`)
     if (a.severity != null) {
-      const label = a.severity === 1 ? 'low' : a.severity === 2 ? 'medium' : a.severity === 3 ? 'high' : ''
+      const label =
+        a.severity === 0 ? 'all good' : a.severity === 1 ? 'low' : a.severity === 2 ? 'medium' : a.severity === 3 ? 'high' : ''
       parts.push(`  Issue severity: ${a.severity}${label ? ` (${label})` : ''}`)
     }
     if (Array.isArray(a.barcodes) && a.barcodes.length > 0) {

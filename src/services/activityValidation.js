@@ -225,7 +225,7 @@ Return a single JSON object with this shape:
 }
 
 Guidance:
-- Important fields include: customer, oem, part_name, summary, intent, severity (1=low, 2=medium, 3=high when present), outcome, issue, resolution, next_actions.
+- Important fields include: customer, oem, part_name, summary, intent, severity (0=all good, 1=low, 2=medium, 3=high when present), outcome, issue, resolution, next_actions.
 - If customer or part_name are missing but clearly implied in the raw text, mention that.
 - If issue or resolution are missing but clearly implied in the raw text, mention that.
 - If there is no clear next action but follow-up is implied, call that out.

@@ -47,14 +47,14 @@ function canViewActivity(activity, user) {
   return isCollaborator(activity, user)
 }
 
-/** Optional filter: structuredData.severity is 1 (low), 2 (medium), or 3 (high). Query: severity=3 or minSeverity=2 */
+/** Optional filter: structuredData.severity is 0 (all good), 1 (low), 2 (medium), or 3 (high). Query: severity=3 or minSeverity=2 */
 function applyStructuredSeverityFilter(filter, query) {
   if (!query || typeof query !== 'object') return
   let exact = NaN
   if (typeof query.severity === 'string' && query.severity.trim()) {
     exact = parseInt(query.severity.trim(), 10)
   }
-  if (!Number.isNaN(exact) && exact >= 1 && exact <= 3) {
+  if (!Number.isNaN(exact) && exact >= 0 && exact <= 3) {
     filter['structuredData.severity'] = exact
     return
   }
@@ -62,7 +62,7 @@ function applyStructuredSeverityFilter(filter, query) {
   if (typeof query.minSeverity === 'string' && query.minSeverity.trim()) {
     minSev = parseInt(query.minSeverity.trim(), 10)
   }
-  if (!Number.isNaN(minSev) && minSev >= 1 && minSev <= 3) {
+  if (!Number.isNaN(minSev) && minSev >= 0 && minSev <= 3) {
     filter['structuredData.severity'] = { $gte: minSev }
   }
 }
@@ -417,7 +417,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       const rawSev = structured.severity
       const sevNum = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
       const severity =
-        sevNum === 1 ? '1_low' : sevNum === 2 ? '2_medium' : sevNum === 3 ? '3_high' : ''
+        sevNum === 0 ? '0_all_good' : sevNum === 1 ? '1_low' : sevNum === 2 ? '2_medium' : sevNum === 3 ? '3_high' : ''
       return [
         a._id,
         a.createdAt ? new Date(a.createdAt).toISOString() : '',

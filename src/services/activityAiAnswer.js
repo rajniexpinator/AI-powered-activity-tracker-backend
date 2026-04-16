@@ -8,7 +8,7 @@ function extractActivityBits(a) {
   const structured = a?.structuredData && typeof a.structuredData === 'object' ? a.structuredData : {}
   const rawSev = structured.severity
   const n = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
-  const severity = n === 1 || n === 2 || n === 3 ? n : null
+  const severity = n === 0 || n === 1 || n === 2 || n === 3 ? n : null
   return {
     customer: asText(a.customer) || asText(structured.customer) || 'Unknown',
     createdAt: a?.createdAt ? String(a.createdAt) : '',
