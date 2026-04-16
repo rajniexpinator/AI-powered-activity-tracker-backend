@@ -30,7 +30,9 @@ router.get('/status', protectRoute, requireRole('admin'), async (_req, res) => {
   })
 })
 
-router.get('/recipients/default', protectRoute, requireRole('admin'), async (_req, res, next) => {
+// Default recipients are readable by any authenticated user so employees can send emails,
+// but only admins can update them via PUT.
+router.get('/recipients/default', protectRoute, async (_req, res, next) => {
   try {
     const recipients = await getDefaultRecipients()
     res.json({ recipients })
