@@ -4,6 +4,24 @@ import { Customer } from '../models/Customer.js'
 
 const router = Router()
 
+function normalizeCustomerEmails(value) {
+  if (typeof value !== 'string') return []
+  return [...new Set(value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))]
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+function normalizeCustomerEmailInput(value) {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const emails = normalizeCustomerEmails(value)
+  if (emails.some((email) => !isValidEmail(email))) {
+    return { error: 'Email must contain valid address(es), separated by commas.' }
+  }
+  return { value: emails.join(', ') || undefined }
+}
+
 
 router.post('/', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
@@ -12,9 +30,14 @@ router.post('/', protectRoute, requireRole('admin'), async (req, res, next) => {
       return res.status(400).json({ error: 'name is required' })
     }
 
+    const normalizedEmail = normalizeCustomerEmailInput(email)
+    if (normalizedEmail?.error) {
+      return res.status(400).json({ error: normalizedEmail.error })
+    }
+
     const customer = await Customer.create({
       name: name.trim(),
-      email: typeof email === 'string' ? email.trim() : undefined,
+      email: normalizedEmail?.value,
       notes: typeof notes === 'string' ? notes.trim() : undefined,
       createdBy: req.user._id,
     })
@@ -54,7 +77,11 @@ router.patch('/:id', protectRoute, requireRole('admin'), async (req, res, next) 
     const update = {}
     if (typeof name === 'string' && name.trim()) update.name = name.trim()
     if (Object.prototype.hasOwnProperty.call(req.body, 'email')) {
-      update.email = typeof email === 'string' && email.trim() ? email.trim() : undefined
+      const normalizedEmail = normalizeCustomerEmailInput(email)
+      if (normalizedEmail?.error) {
+        return res.status(400).json({ error: normalizedEmail.error })
+      }
+      update.email = normalizedEmail?.value
     }
     if (Object.prototype.hasOwnProperty.call(req.body, 'notes')) {
       update.notes = typeof notes === 'string' && notes.trim() ? notes.trim() : undefined

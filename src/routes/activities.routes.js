@@ -76,6 +76,11 @@ function normalizeEmailList(value) {
     .filter(Boolean)
 }
 
+function normalizeCommaSeparatedEmails(value) {
+  if (typeof value !== 'string' || !value.trim()) return []
+  return [...new Set(value.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))]
+}
+
 function sanitizeFilename(name, fallback = 'attachment') {
   if (typeof name !== 'string') return fallback
   const cleaned = name
@@ -1070,18 +1075,17 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
         })
       }
 
-      const custEmail =
-        typeof byCustomer.email === 'string' && byCustomer.email.trim()
-          ? byCustomer.email.trim().toLowerCase()
-          : ''
-      if (!custEmail) {
+      const customerEmails = normalizeCommaSeparatedEmails(byCustomer.email)
+      if (customerEmails.length === 0) {
         return res.status(400).json({
           error:
             'Cannot send email: no email is linked to this customer. Add an email for this customer in Customers, then try again.',
         })
       }
 
-      if (!recipientTo.includes(custEmail)) recipientTo.push(custEmail)
+      for (const customerEmail of customerEmails) {
+        if (!recipientTo.includes(customerEmail)) recipientTo.push(customerEmail)
+      }
     }
 
     for (const e of defaults.to) {
