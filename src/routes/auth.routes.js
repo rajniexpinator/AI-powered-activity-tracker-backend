@@ -35,14 +35,14 @@ router.post('/login', async (req, res, next) => {
     }
     const user = await User.findOne({ email: email.trim().toLowerCase() }).select('+passwordHash')
     if (!user) {
-      return res.status(401).json({ error: 'Invalid email or password' })
+      return res.status(401).json({ error: 'Email does not exist' })
     }
     if (!user.isActive) {
       return res.status(401).json({ error: 'Account is disabled' })
     }
     const match = await bcrypt.compare(password, user.passwordHash)
     if (!match) {
-      return res.status(401).json({ error: 'Invalid email or password' })
+      return res.status(401).json({ error: 'Password is incorrect' })
     }
     const token = signToken(user)
     res.json({
