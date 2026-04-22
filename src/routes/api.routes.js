@@ -8,6 +8,7 @@ import { reportsRouter } from './reports.routes.js'
 import { ms365Router } from './ms365.routes.js'
 import { barcodesRouter } from './barcodes.routes.js'
 import { employeeFilesRouter } from './employeeFiles.routes.js'
+import { whatsappRouter } from './whatsapp.routes.js'
 
 const router = Router()
 
@@ -29,5 +30,6 @@ router.use('/reports', reportsRouter)
 router.use('/ms365', ms365Router)
 router.use('/barcodes', barcodesRouter)
 router.use('/employee-files', employeeFilesRouter)
+router.use('/whatsapp', whatsappRouter)
 
 export { router as apiRouter }

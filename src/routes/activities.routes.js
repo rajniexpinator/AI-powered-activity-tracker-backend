@@ -1099,6 +1099,15 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
     }
     ccMerged = [...new Set(ccMerged)]
 
+    // Always copy the logged-in sender so they stay on the thread (reply-all visibility).
+    const requesterEmail =
+      typeof req.user?.email === 'string' && req.user.email.trim()
+        ? req.user.email.trim().toLowerCase()
+        : ''
+    if (requesterEmail && !recipientTo.includes(requesterEmail) && !ccMerged.includes(requesterEmail)) {
+      ccMerged.push(requesterEmail)
+    }
+
     if (recipientTo.length === 0 && typeof req.user.email === 'string' && req.user.email.trim()) {
       recipientTo.push(req.user.email.trim().toLowerCase())
     }
