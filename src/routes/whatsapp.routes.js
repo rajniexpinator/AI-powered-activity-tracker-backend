@@ -1,8 +1,19 @@
 import { Router } from 'express'
 import { protectRoute } from '../middleware/auth.js'
-import { isTwilioWhatsAppConfigured, sendTwilioWhatsAppMessage } from '../services/twilioWhatsApp.js'
+import {
+  getTwilioWhatsAppDefaultTemplateSid,
+  isTwilioWhatsAppConfigured,
+  sendTwilioWhatsAppMessage,
+} from '../services/twilioWhatsApp.js'
 
 const router = Router()
+
+router.get('/config', protectRoute, (_req, res) => {
+  res.json({
+    configured: isTwilioWhatsAppConfigured(),
+    defaultTemplateSid: getTwilioWhatsAppDefaultTemplateSid(),
+  })
+})
 
 // Twilio webhook endpoint (Sandbox / production sender inbound messages).
 // Configure in Twilio: "When a message comes in" -> POST https://<api>/api/whatsapp/webhook
@@ -30,17 +41,26 @@ router.post('/send', protectRoute, async (req, res, next) => {
       })
     }
 
-    const { to, message } = req.body || {}
+    const { to, message, contentSid, contentVariables } = req.body || {}
     if (!to || typeof to !== 'string') {
       return res.status(400).json({ error: 'Recipient phone number is required in "to"' })
     }
-    if (!message || typeof message !== 'string' || !message.trim()) {
-      return res.status(400).json({ error: 'Message text is required in "message"' })
+    const messageText = typeof message === 'string' ? message.trim() : ''
+    const templateSid = typeof contentSid === 'string' ? contentSid.trim() : ''
+    const hasMessage = Boolean(messageText)
+    const hasTemplate = Boolean(templateSid)
+    if (!hasMessage && !hasTemplate) {
+      return res.status(400).json({ error: 'Provide either "message" or "contentSid".' })
+    }
+    if (hasMessage && hasTemplate) {
+      return res.status(400).json({ error: 'Provide either "message" or template fields, not both.' })
     }
 
     const sent = await sendTwilioWhatsAppMessage({
       to,
-      body: message,
+      body: hasMessage ? messageText : undefined,
+      contentSid: hasTemplate ? templateSid : undefined,
+      contentVariables: hasTemplate && typeof contentVariables === 'string' ? contentVariables : undefined,
     })
 
     res.json({

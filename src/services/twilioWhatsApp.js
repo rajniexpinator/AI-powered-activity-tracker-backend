@@ -1,6 +1,7 @@
 const accountSid = process.env.TWILIO_ACCOUNT_SID
 const authToken = process.env.TWILIO_AUTH_TOKEN
 const fromNumber = process.env.TWILIO_WHATSAPP_FROM
+const defaultTemplateSid = process.env.TWILIO_WHATSAPP_TEMPLATE_SID
 
 function normalizeWhatsAppAddress(value) {
   if (typeof value !== 'string') return ''
@@ -17,10 +18,15 @@ export function getTwilioWhatsAppFrom() {
   return normalizeWhatsAppAddress(fromNumber || '')
 }
 
+export function getTwilioWhatsAppDefaultTemplateSid() {
+  return typeof defaultTemplateSid === 'string' ? defaultTemplateSid.trim() : ''
+}
+
 /**
- * Sends one WhatsApp text message via Twilio Programmable Messaging.
+ * Sends one WhatsApp message via Twilio Programmable Messaging.
+ * Supports either freeform body (inside 24h window) or approved template.
  */
-export async function sendTwilioWhatsAppMessage({ to, body }) {
+export async function sendTwilioWhatsAppMessage({ to, body, contentSid, contentVariables }) {
   if (!isTwilioWhatsAppConfigured()) {
     throw new Error('Twilio WhatsApp is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM.')
   }
@@ -30,8 +36,15 @@ export async function sendTwilioWhatsAppMessage({ to, body }) {
   if (!toAddress || !fromAddress) {
     throw new Error('Invalid WhatsApp addresses. Provide "to" and set TWILIO_WHATSAPP_FROM.')
   }
-  if (typeof body !== 'string' || !body.trim()) {
-    throw new Error('Message body is required.')
+  const bodyText = typeof body === 'string' ? body.trim() : ''
+  const templateSid = typeof contentSid === 'string' ? contentSid.trim() : ''
+  const hasBody = Boolean(bodyText)
+  const hasTemplate = Boolean(templateSid)
+  if (!hasBody && !hasTemplate) {
+    throw new Error('Provide either message body or contentSid for template send.')
+  }
+  if (hasBody && hasTemplate) {
+    throw new Error('Provide either message body or template fields, not both.')
   }
 
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`
@@ -39,8 +52,15 @@ export async function sendTwilioWhatsAppMessage({ to, body }) {
   const form = new URLSearchParams({
     From: fromAddress,
     To: toAddress,
-    Body: body.trim(),
   })
+  if (hasBody) {
+    form.set('Body', bodyText)
+  } else {
+    form.set('ContentSid', templateSid)
+    if (typeof contentVariables === 'string' && contentVariables.trim()) {
+      form.set('ContentVariables', contentVariables.trim())
+    }
+  }
 
   const res = await fetch(url, {
     method: 'POST',

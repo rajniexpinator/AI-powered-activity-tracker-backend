@@ -138,7 +138,7 @@ router.get('/', protectRoute, requireRole('admin'), async (req, res, next) => {
       Report.countDocuments(filter),
     ])
 
-    const totalPages = Math.ceil(total / limit)
+    const totalPages = Math.max(1, Math.ceil(total / limit))
     res.json({ reports, total, page, limit, totalPages })
   } catch (err) {
     next(err)
