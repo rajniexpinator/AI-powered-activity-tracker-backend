@@ -178,7 +178,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
 
   let row = startRow
 
-  ws.mergeCells(`A${row}:F${row}`)
+  ws.mergeCells(`A${row}:G${row}`)
   ws.getCell(row, 1).value = `Week ending ${weekEndLabel} (${formatUsShort(weekMonday)} – ${formatUsShort(sunday)})`
   ws.getCell(row, 1).font = { bold: true, size: 11 }
   row += 1
@@ -206,7 +206,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
 
   row += 1
 
-  const headers = ['Day', 'Date', 'Part number', 'Concern / QR number', 'Activity summary', 'Hours']
+  const headers = ['Day', 'Date', 'Part number', 'Location', 'Concern / QR number', 'Activity summary', 'Hours']
   headers.forEach((h, i) => {
     const cell = ws.getCell(row, i + 1)
     cell.value = h
@@ -241,6 +241,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
       ws.getCell(row, 4).value = ''
       ws.getCell(row, 5).value = ''
       ws.getCell(row, 6).value = ''
+      ws.getCell(row, 7).value = ''
       row += 1
       continue
     }
@@ -248,6 +249,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
     for (const a of dayActs) {
       const st = getStructured(a)
       const part = st.part_name || st.part_number || ''
+      const location = (a.location || st.location || '').toString().toUpperCase()
       const concern = st.concern_id || st.dtc_code || ''
       const activityText = activitySummaryForExport(a)
       const h = hoursFromActivity(a)
@@ -256,17 +258,18 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
       ws.getCell(row, 1).value = DAY_LABELS[i]
       ws.getCell(row, 2).value = formatUsShort(dayDate)
       ws.getCell(row, 3).value = part
-      ws.getCell(row, 4).value = concern
-      ws.getCell(row, 5).value = activityText
-      ws.getCell(row, 6).value = h != null ? h : ''
+      ws.getCell(row, 4).value = location
+      ws.getCell(row, 5).value = concern
+      ws.getCell(row, 6).value = activityText
+      ws.getCell(row, 7).value = h != null ? h : ''
       row += 1
     }
   }
 
-  ws.getCell(row, 5).value = 'Total for period'
-  ws.getCell(row, 5).font = { bold: true }
-  ws.getCell(row, 6).value = totalHours > 0 ? Math.round(totalHours * 10) / 10 : ''
+  ws.getCell(row, 6).value = 'Total for period'
   ws.getCell(row, 6).font = { bold: true }
+  ws.getCell(row, 7).value = totalHours > 0 ? Math.round(totalHours * 10) / 10 : ''
+  ws.getCell(row, 7).font = { bold: true }
   row += 2
 
   ws.getCell(row, 1).value = 'Quality meetings & related notes'
@@ -282,7 +285,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
       const when = a.createdAt ? formatUsShort(parseLocalDateFromIso(a.createdAt)) : ''
       return when && t !== '—' ? `${when}: ${t}` : t
     })
-    ws.mergeCells(`A${row}:F${row}`)
+    ws.mergeCells(`A${row}:G${row}`)
     ws.getCell(row, 1).value = lines.join('\n')
     ws.getCell(row, 1).alignment = { wrapText: true, vertical: 'top' }
   }
@@ -317,13 +320,13 @@ export async function buildWeeklyActivityExcelBuffer({ byCustomer, weekMondays, 
     const ws = wb.addWorksheet(sheetName)
 
     let row = 1
-    ws.mergeCells(`A${row}:F${row}`)
+    ws.mergeCells(`A${row}:G${row}`)
     ws.getCell(row, 1).value = 'Weekly activity report'
     ws.getCell(row, 1).font = { bold: true, size: 14 }
     ws.getCell(row, 1).alignment = { horizontal: 'center' }
     row += 1
 
-    ws.mergeCells(`A${row}:F${row}`)
+    ws.mergeCells(`A${row}:G${row}`)
     ws.getCell(row, 1).value =
       'Timesheet layout — one tab per customer — from saved AI activity logs (matches Activity filters).'
     ws.getCell(row, 1).font = { size: 11 }
@@ -331,7 +334,7 @@ export async function buildWeeklyActivityExcelBuffer({ byCustomer, weekMondays, 
     row += 1
 
     if (periodSummary) {
-      ws.mergeCells(`A${row}:F${row}`)
+      ws.mergeCells(`A${row}:G${row}`)
       ws.getCell(row, 1).value = periodSummary
       ws.getCell(row, 1).font = { size: 10, italic: true }
       ws.getCell(row, 1).alignment = { horizontal: 'center' }
@@ -349,6 +352,7 @@ export async function buildWeeklyActivityExcelBuffer({ byCustomer, weekMondays, 
       { width: 12 },
       { width: 11 },
       { width: 28 },
+      { width: 9 },
       { width: 16 },
       { width: 50 },
       { width: 10 },

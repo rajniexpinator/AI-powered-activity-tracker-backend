@@ -25,6 +25,33 @@ const MAX_ATTACHMENTS_PER_ENTRY = 10
 const MAX_MS365_ATTACHMENT_BYTES = 3 * 1024 * 1024
 const MAX_SHARED_USERS = 30
 const MAX_COLLAB_NOTES = 200
+const MAX_LOCATION_LENGTH = 5
+
+/**
+ * Normalize a Location tag the same way for both create and update flows.
+ * Accepts up to 5 chars, uppercases, strips anything that isn't a letter,
+ * digit or dash. Returns '' if there's nothing usable so we can clear it.
+ */
+function normalizeLocationValue(raw) {
+  if (raw == null) return undefined
+  if (typeof raw !== 'string') return undefined
+  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, MAX_LOCATION_LENGTH)
+  return cleaned
+}
+
+/**
+ * Pick a Location from either the request body root or structured.location
+ * (since the AI extraction may have inferred it). Top-level wins.
+ */
+function pickLocationFromBody(body, structured) {
+  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'location')) {
+    return normalizeLocationValue(body.location)
+  }
+  if (structured && typeof structured === 'object' && structured.location != null) {
+    return normalizeLocationValue(structured.location)
+  }
+  return undefined
+}
 
 /** User id whether ref is an ObjectId, string, or populated { _id, name, ... } */
 function refToId(ref) {
@@ -175,12 +202,17 @@ router.post('/', protectRoute, async (req, res, next) => {
         ? structured.customer.trim()
         : undefined
 
+    const location = pickLocationFromBody(req.body, structured)
+
     const activityPayload = {
       userId: req.user._id,
       customer,
       summary,
       rawConversation: rawText,
       structuredData: structured,
+    }
+    if (location) {
+      activityPayload.location = location
     }
 
     if (Array.isArray(images)) {
@@ -231,7 +263,7 @@ router.get('/', protectRoute, async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1, location: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -239,6 +271,7 @@ router.get('/', protectRoute, async (req, res, next) => {
     const activities = rows.map((a) => ({
       _id: a._id,
       customer: a.customer,
+      location: a.location,
       summary: a.summary,
       createdAt: a.createdAt,
       isOwner: String(a.userId) === String(uid),
@@ -324,7 +357,7 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1, location: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -382,7 +415,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1, structuredData: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1, structuredData: 1, location: 1 })
       .lean()
 
     const esc = (value) => {
@@ -398,6 +431,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       'employee_email',
       'employee_role',
       'customer',
+      'location',
       'issue',
       'resolution',
       'summary',
@@ -430,6 +464,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
         user.email || '',
         user.role || '',
         a.customer || '',
+        a.location || '',
         issue,
         resolution,
         a.summary || '',
@@ -532,6 +567,7 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
         isArchived: 1,
         userId: 1,
         structuredData: 1,
+        location: 1,
       })
       .lean()
 
@@ -589,7 +625,7 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1, structuredData: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1, structuredData: 1, location: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -857,11 +893,16 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
     const hasStructured = structured && typeof structured === 'object'
     const hasImages = Array.isArray(images)
     const hasAttachments = Array.isArray(attachments)
+    const body = req.body || {}
+    const hasLocationInBody = Object.prototype.hasOwnProperty.call(body, 'location')
+    const hasLocationInStructured =
+      hasStructured && Object.prototype.hasOwnProperty.call(structured, 'location')
+    const hasLocation = hasLocationInBody || hasLocationInStructured
 
-    if (!hasRawText && !hasStructured && !hasImages && !hasAttachments) {
+    if (!hasRawText && !hasStructured && !hasImages && !hasAttachments && !hasLocation) {
       return res
         .status(400)
-        .json({ error: 'Provide at least one field to update: rawText, structured, images, or attachments' })
+        .json({ error: 'Provide at least one field to update: rawText, structured, images, attachments, or location' })
     }
 
     if (hasRawText) {
@@ -909,6 +950,11 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
       activity.attachments = normalizeAttachments(attachments) ?? []
     }
 
+    if (hasLocation) {
+      const nextLocation = pickLocationFromBody(body, structured)
+      activity.location = nextLocation ? nextLocation : undefined
+    }
+
     await activity.save()
     res.json({ activity })
   } catch (err) {
@@ -947,6 +993,7 @@ router.post('/admin/ai-query', protectRoute, requireRole('admin'), async (req, r
         isArchived: 1,
         userId: 1,
         structuredData: 1,
+        location: 1,
       })
       .lean()
 
@@ -998,6 +1045,7 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
         userId: 1,
         structuredData: 1,
         images: 1,
+        location: 1,
       })
       .lean()
 
@@ -1124,6 +1172,7 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
 
     const createdLabel = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown date'
     const safeCustomer = typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Unknown customer'
+    const safeLocation = typeof activity.location === 'string' && activity.location.trim() ? activity.location.trim() : ''
     const safeSummary = typeof activity.summary === 'string' && activity.summary.trim() ? activity.summary.trim() : 'No summary'
     const rawText =
       typeof activity.rawConversation === 'string' && activity.rawConversation.trim()
@@ -1170,6 +1219,7 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
       `Activity log export`,
       ``,
       `Customer: ${safeCustomer}`,
+      ...(safeLocation ? [`Location: ${safeLocation}`] : []),
       `Created: ${createdLabel}`,
       `Summary: ${safeSummary}`,
       ``,
@@ -1281,7 +1331,7 @@ router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (r
       .sort({ createdAt: -1 })
       .limit(max)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1, location: 1 })
       .lean()
 
     const report = await generateWeeklyQualityReport(activities, { from, to })

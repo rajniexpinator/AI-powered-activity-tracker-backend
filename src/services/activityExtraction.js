@@ -26,6 +26,7 @@ You must respond with a single JSON object that matches this schema:
   "customer": string | null,              // Tier-1 / Tier-2 supplier name (e.g. "Bosch", "Inoac"), if known
   "oem": string | null,                   // OEM, e.g. "Ford", "GM", "Toyota", "Volvo"
   "plant": string | null,                 // Plant name, e.g. "Kentucky Truck Plant", or null if not stated
+  "location": string | null,              // Up to 5 chars — physical spot tag at the plant (cell, aisle, dock, line code), e.g. "A12", "B-7", "ZN102". Letters/digits/dash only, uppercased. null if not stated.
   "area": string | null,                  // e.g. "line", "shop", "incoming quality", "engineering", "quality meeting", "manager-call", etc.
   "source_type": string,                  // One of: "daily-walk", "repair-shop", "incoming-quality", "engineering", "quality-meeting", "manager-call-email", "other"
   "summary": string,                      // One-sentence summary of what happened
@@ -51,6 +52,7 @@ You must respond with a single JSON object that matches this schema:
 Rules:
 - ALWAYS return valid JSON (no comments, no trailing commas).
 - "severity": Use 0 when the Apex employee is talking with the operator and everything is normal/no issue. Use 1 (low) for minor observations. Use 2 (medium) for standard quality issues with moderate impact. Use 3 (high) only when the text clearly signals major impact (e.g. line stop, safety, recall risk, repeated customer escalation). Use null if you cannot infer severity—the user will choose before saving.
+- "location": A short 1–5 character physical-location tag at the plant (e.g. "A12", "B-7", "ZN102"). Look for phrases like "at A12", "in cell B-7", "line ZN102", "dock 4". Only return letters, digits and dashes (uppercased) and at most 5 characters. If no location is mentioned, return null.
 - If some field is unknown, use null (or [] for arrays) instead of guessing wildly.
 - Keep "tags" short and machine-friendly (lowercase, hyphen-separated).
 - Use the domain of Apex Quality Control: Apex employees are onsite at OEM plants (mainly Ford) representing suppliers.

@@ -2,12 +2,22 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID
 const authToken = process.env.TWILIO_AUTH_TOKEN
 const fromNumber = process.env.TWILIO_WHATSAPP_FROM
 const defaultTemplateSid = process.env.TWILIO_WHATSAPP_TEMPLATE_SID
+const WHATSAPP_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000
 
-function normalizeWhatsAppAddress(value) {
+export function normalizeWhatsAppAddress(value) {
   if (typeof value !== 'string') return ''
   const trimmed = value.trim()
   if (!trimmed) return ''
   return trimmed.toLowerCase().startsWith('whatsapp:') ? trimmed : `whatsapp:${trimmed}`
+}
+
+export function getWhatsAppSessionWindowMs() {
+  return WHATSAPP_SESSION_WINDOW_MS
+}
+
+export function isWithinWhatsAppSessionWindow(lastInboundAt, nowMs = Date.now()) {
+  if (!(lastInboundAt instanceof Date) || Number.isNaN(lastInboundAt.getTime())) return false
+  return nowMs - lastInboundAt.getTime() <= WHATSAPP_SESSION_WINDOW_MS
 }
 
 export function isTwilioWhatsAppConfigured() {

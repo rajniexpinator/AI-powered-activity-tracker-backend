@@ -75,7 +75,7 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       .sort({ createdAt: -1 })
       .limit(max)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1, location: 1 })
       .lean()
 
     const report = await generateWeeklyQualityReport(activities, {
