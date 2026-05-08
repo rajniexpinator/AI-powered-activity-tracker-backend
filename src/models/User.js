@@ -6,7 +6,15 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, required: true, select: false },
     name: { type: String, trim: true },
     role: { type: String, enum: ['admin', 'employee'], default: 'employee' },
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true },
+    whatsAppNumber: { type: String, trim: true, default: '' },
+    whatsAppNotifications: {
+      enabled: { type: Boolean, default: false },
+      severityLevels: {
+        type: [{ type: Number, enum: [1, 2, 3] }],
+        default: [],
+      },
+    },
   },
   { timestamps: true }
 )

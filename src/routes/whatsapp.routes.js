@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { protectRoute } from '../middleware/auth.js'
 import {
+  getTwilioWhatsAppFrom,
   getWhatsAppSessionWindowMs,
   getTwilioWhatsAppDefaultTemplateSid,
   isWithinWhatsAppSessionWindow,
@@ -10,8 +11,102 @@ import {
 } from '../services/twilioWhatsApp.js'
 import { isDbConnected } from '../config/db.js'
 import { WhatsAppSession } from '../models/WhatsAppSession.js'
+import { WhatsAppPendingDelivery } from '../models/WhatsAppPendingDelivery.js'
 
 const router = Router()
+
+async function flushPendingDeliveriesForAddress(address) {
+  if (!address) return { flushed: 0, failed: 0 }
+  const deliveries = await WhatsAppPendingDelivery.find({
+    address,
+    status: 'pending',
+  })
+    .sort({ createdAt: 1 })
+    .limit(20)
+
+  let flushed = 0
+  let failed = 0
+  for (const item of deliveries) {
+    try {
+      const messages = Array.isArray(item.messages) ? item.messages.filter((m) => typeof m === 'string' && m.trim()) : []
+      for (const msg of messages) {
+        await sendTwilioWhatsAppMessage({ to: address, body: msg.trim() })
+      }
+      item.status = 'sent'
+      item.sentAt = new Date()
+      item.lastError = ''
+      await item.save()
+      flushed += 1
+    } catch (err) {
+      item.status = 'failed'
+      item.lastError = err?.message || String(err)
+      await item.save()
+      failed += 1
+      console.warn('[twilio][whatsapp][pending-delivery][failed]', {
+        address,
+        deliveryId: String(item._id),
+        error: item.lastError,
+      })
+    }
+  }
+  return { flushed, failed }
+}
+
+router.get('/debug', protectRoute, async (req, res, next) => {
+  try {
+    const rawTo = typeof req.query?.to === 'string' ? req.query.to.trim() : ''
+    const normalizedTo = rawTo ? normalizeWhatsAppAddress(rawTo) : ''
+    const sessionStateKnown = isDbConnected()
+    let lastInboundAt = null
+    let sessionOpen = false
+    if (normalizedTo && sessionStateKnown) {
+      const session = await WhatsAppSession.findOne({ address: normalizedTo }).lean()
+      if (session?.lastInboundAt) {
+        const dt = new Date(session.lastInboundAt)
+        if (!Number.isNaN(dt.getTime())) {
+          lastInboundAt = dt
+          sessionOpen = isWithinWhatsAppSessionWindow(dt)
+        }
+      }
+    }
+
+    const templateSid = getTwilioWhatsAppDefaultTemplateSid()
+    res.json({
+      configured: isTwilioWhatsAppConfigured(),
+      dbConnected: sessionStateKnown,
+      from: getTwilioWhatsAppFrom(),
+      hasDefaultTemplateSid: Boolean(templateSid),
+      defaultTemplateSidPreview: templateSid ? `${templateSid.slice(0, 6)}...${templateSid.slice(-4)}` : '',
+      sessionWindowMs: getWhatsAppSessionWindowMs(),
+      recipient: normalizedTo
+        ? {
+            requestedTo: rawTo,
+            normalizedTo,
+            lastInboundAt,
+            sessionOpen,
+            canSendFreeformNow: sessionStateKnown ? sessionOpen : true,
+            note: sessionStateKnown
+              ? sessionOpen
+                ? '24h session is open for this recipient.'
+                : '24h session is closed for this recipient. Free-form message will fail unless recipient replies first.'
+              : 'Session state unknown because DB is not connected; backend cannot enforce 24h check.',
+          }
+        : {
+            note: 'Pass query ?to=+<countrycode><number> to debug recipient session state.',
+          },
+      pendingDeliveries:
+        normalizedTo && sessionStateKnown
+          ? await WhatsAppPendingDelivery.find({ address: normalizedTo, status: 'pending' })
+              .select({ _id: 1, activityId: 1, createdAt: 1, status: 1 })
+              .sort({ createdAt: 1 })
+              .limit(20)
+              .lean()
+          : [],
+    })
+  } catch (err) {
+    next(err)
+  }
+})
 
 router.get('/config', protectRoute, (_req, res) => {
   res.json({
@@ -49,6 +144,14 @@ router.post('/webhook', async (req, res) => {
           setDefaultsOnInsert: true,
         }
       )
+      const pendingResult = await flushPendingDeliveriesForAddress(normalizedFrom)
+      if (pendingResult.flushed > 0 || pendingResult.failed > 0) {
+        console.log('[twilio][whatsapp][pending-delivery][flush]', {
+          address: normalizedFrom,
+          flushed: pendingResult.flushed,
+          failed: pendingResult.failed,
+        })
+      }
     } catch (err) {
       console.warn('[twilio][whatsapp][session][webhook-update-failed]', err?.message || err)
     }

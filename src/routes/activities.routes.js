@@ -4,6 +4,9 @@ import { protectRoute, requireRole } from '../middleware/auth.js'
 import { Activity } from '../models/Activity.js'
 import { Customer } from '../models/Customer.js'
 import { User } from '../models/User.js'
+import { WhatsAppSession } from '../models/WhatsAppSession.js'
+import { WhatsAppPendingDelivery } from '../models/WhatsAppPendingDelivery.js'
+import { isDbConnected } from '../config/db.js'
 import { getDefaultMs365Recipients } from '../services/ms365Recipients.js'
 import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
@@ -18,6 +21,13 @@ import {
   getMondayOfWeekContaining,
   groupActivitiesByCustomer,
 } from '../services/weeklyActivityExcel.js'
+import {
+  getTwilioWhatsAppDefaultTemplateSid,
+  isTwilioWhatsAppConfigured,
+  isWithinWhatsAppSessionWindow,
+  normalizeWhatsAppAddress,
+  sendTwilioWhatsAppMessage,
+} from '../services/twilioWhatsApp.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
@@ -177,6 +187,136 @@ function normalizeAttachments(raw) {
   return out
 }
 
+function readSeverity(structured) {
+  const raw = structured && typeof structured === 'object' ? structured.severity : undefined
+  const sev = Number(raw)
+  if (!Number.isInteger(sev) || sev < 1 || sev > 3) return null
+  return sev
+}
+
+function formatLocalDateTime(value) {
+  const dt = value ? new Date(value) : new Date()
+  if (Number.isNaN(dt.getTime())) return ''
+  return dt.toLocaleString()
+}
+
+function splitMessage(text, chunkSize = 1400) {
+  const source = typeof text === 'string' ? text.trim() : ''
+  if (!source) return []
+  if (source.length <= chunkSize) return [source]
+  const out = []
+  let cursor = 0
+  while (cursor < source.length) {
+    out.push(source.slice(cursor, cursor + chunkSize))
+    cursor += chunkSize
+  }
+  return out
+}
+
+function buildDetailedWhatsAppMessages(activity, severity) {
+  const customer = typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Customer'
+  const summary = typeof activity.summary === 'string' && activity.summary.trim() ? activity.summary.trim() : 'Activity update'
+  const location = typeof activity.location === 'string' && activity.location.trim() ? activity.location.trim() : '-'
+  const created = formatLocalDateTime(activity.createdAt)
+  const rawConversation =
+    typeof activity.rawConversation === 'string' && activity.rawConversation.trim()
+      ? activity.rawConversation.trim()
+      : summary
+  const header =
+    `New log added (Severity ${severity})\n` +
+    `Customer: ${customer}\n` +
+    `Location: ${location}\n` +
+    `Summary: ${summary}\n` +
+    (created ? `Created: ${created}` : '')
+
+  const attachmentUrls = [
+    ...(Array.isArray(activity.images) ? activity.images : []),
+    ...(Array.isArray(activity.attachments) ? activity.attachments.map((a) => a?.url).filter(Boolean) : []),
+  ]
+    .filter((url) => typeof url === 'string' && url.trim())
+    .map((url) => url.trim())
+
+  const messages = [header, ...splitMessage(`Log details:\n${rawConversation}`)]
+  if (attachmentUrls.length > 0) {
+    messages.push(...splitMessage(`Attachments:\n${attachmentUrls.join('\n')}`))
+  }
+  return messages.filter(Boolean)
+}
+
+async function dispatchSeverityWhatsAppNotifications(activity, actorUserId) {
+  try {
+    if (!activity || !isTwilioWhatsAppConfigured()) return
+    const severity = readSeverity(activity.structuredData)
+    if (severity == null) return
+
+    const recipients = await User.find({
+      isActive: true,
+      whatsAppNumber: { $exists: true, $ne: '' },
+      'whatsAppNotifications.enabled': true,
+      'whatsAppNotifications.severityLevels': severity,
+    })
+      .select('name email whatsAppNumber')
+      .lean()
+
+    if (!Array.isArray(recipients) || recipients.length === 0) return
+
+    const detailedMessages = buildDetailedWhatsAppMessages(activity, severity)
+    if (detailedMessages.length === 0) return
+
+    for (const recipient of recipients) {
+      try {
+        const toAddress = normalizeWhatsAppAddress(recipient.whatsAppNumber)
+        if (!toAddress) continue
+        let sessionOpen = true
+        if (isDbConnected()) {
+          const session = await WhatsAppSession.findOne({ address: toAddress }).lean()
+          sessionOpen = Boolean(session?.lastInboundAt && isWithinWhatsAppSessionWindow(new Date(session.lastInboundAt)))
+        }
+
+        if (sessionOpen) {
+          for (const msg of detailedMessages) {
+            await sendTwilioWhatsAppMessage({ to: toAddress, body: msg })
+          }
+          continue
+        }
+
+        const templateSid = getTwilioWhatsAppDefaultTemplateSid()
+        if (!templateSid) {
+          console.warn('[whatsapp][severity-notify][template-missing]', {
+            recipient: recipient.email || recipient._id,
+            actorUserId: String(actorUserId || ''),
+            severity,
+          })
+          continue
+        }
+
+        await sendTwilioWhatsAppMessage({
+          to: toAddress,
+          contentSid: templateSid,
+          contentVariables: JSON.stringify({
+            1: customer || 'Customer',
+          }),
+        })
+        await WhatsAppPendingDelivery.create({
+          address: toAddress,
+          activityId: activity._id,
+          messages: detailedMessages,
+          status: 'pending',
+        })
+      } catch (err) {
+        console.warn('[whatsapp][severity-notify][send-failed]', {
+          recipient: recipient.email || recipient._id,
+          actorUserId: String(actorUserId || ''),
+          severity,
+          error: err?.message || String(err),
+        })
+      }
+    }
+  } catch (err) {
+    console.warn('[whatsapp][severity-notify][unexpected-failure]', err?.message || err)
+  }
+}
+
 // POST /api/activities
 // Body: { rawText: string, structured: any, images?: string[] }
 // Saves a new Activity linked to the logged-in user.
@@ -235,6 +375,7 @@ router.post('/', protectRoute, async (req, res, next) => {
     }
 
     const activity = await Activity.create(activityPayload)
+    void dispatchSeverityWhatsAppNotifications(activity, req.user?._id)
 
     res.status(201).json({ activity })
   } catch (err) {

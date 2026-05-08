@@ -17,13 +17,30 @@ function signToken(user) {
 }
 
 function toUserResponse(user) {
+  const notification = user?.whatsAppNotifications || {}
+  const severityLevels = Array.isArray(notification.severityLevels)
+    ? notification.severityLevels.filter((v) => Number.isInteger(v) && v >= 1 && v <= 3)
+    : []
   return {
     id: user._id,
     email: user.email,
     name: user.name,
     role: user.role,
-    isActive: user.isActive
+    isActive: user.isActive,
+    whatsAppNumber: typeof user.whatsAppNumber === 'string' ? user.whatsAppNumber : '',
+    whatsAppNotifications: {
+      enabled: Boolean(notification.enabled),
+      severityLevels: [...new Set(severityLevels)].sort((a, b) => a - b),
+    },
   }
+}
+
+function normalizeSeverityLevels(value) {
+  if (!Array.isArray(value)) return []
+  const out = value
+    .map((v) => Number(v))
+    .filter((v) => Number.isInteger(v) && v >= 1 && v <= 3)
+  return [...new Set(out)].sort((a, b) => a - b)
 }
 
 // POST /api/auth/login
@@ -116,7 +133,7 @@ router.get('/me', protectRoute, (req, res) => {
 // PATCH /api/auth/me — update current user profile (name, password)
 router.patch('/me', protectRoute, async (req, res, next) => {
   try {
-    const { name, currentPassword, newPassword } = req.body || {}
+    const { name, currentPassword, newPassword, whatsAppNumber, whatsAppNotifications } = req.body || {}
     const update = {}
     if (typeof name === 'string') {
       update.name = name.trim() || undefined
@@ -132,8 +149,19 @@ router.patch('/me', protectRoute, async (req, res, next) => {
       }
       update.passwordHash = await bcrypt.hash(newPassword, 10)
     }
+    if (typeof whatsAppNumber === 'string') {
+      update.whatsAppNumber = whatsAppNumber.trim()
+    }
+    if (whatsAppNotifications && typeof whatsAppNotifications === 'object') {
+      if (typeof whatsAppNotifications.enabled === 'boolean') {
+        update['whatsAppNotifications.enabled'] = whatsAppNotifications.enabled
+      }
+      if (Object.prototype.hasOwnProperty.call(whatsAppNotifications, 'severityLevels')) {
+        update['whatsAppNotifications.severityLevels'] = normalizeSeverityLevels(whatsAppNotifications.severityLevels)
+      }
+    }
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: 'Provide name and/or newPassword (with currentPassword)' })
+      return res.status(400).json({ error: 'Provide at least one field to update' })
     }
     const updated = await User.findByIdAndUpdate(
       req.user._id,
@@ -183,12 +211,21 @@ router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next)
 // PATCH /api/auth/users/:id — update role or isActive (admin only)
 router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { role, isActive, name, email, resetPassword } = req.body || {}
+    const { role, isActive, name, email, resetPassword, whatsAppNumber, whatsAppNotifications } = req.body || {}
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
     if (role && ['admin', 'employee'].includes(role)) update.role = role
     if (typeof name === 'string') update.name = name.trim() || undefined
     if (typeof email === 'string' && email.trim()) update.email = email.trim().toLowerCase()
+    if (typeof whatsAppNumber === 'string') update.whatsAppNumber = whatsAppNumber.trim()
+    if (whatsAppNotifications && typeof whatsAppNotifications === 'object') {
+      if (typeof whatsAppNotifications.enabled === 'boolean') {
+        update['whatsAppNotifications.enabled'] = whatsAppNotifications.enabled
+      }
+      if (Object.prototype.hasOwnProperty.call(whatsAppNotifications, 'severityLevels')) {
+        update['whatsAppNotifications.severityLevels'] = normalizeSeverityLevels(whatsAppNotifications.severityLevels)
+      }
+    }
 
     if (resetPassword && typeof resetPassword === 'string') {
       if (resetPassword.length < 6) {
