@@ -1,9 +1,12 @@
 import { Router } from 'express'
+import mongoose from 'mongoose'
 import { protectRoute } from '../middleware/auth.js'
 import {
   getTwilioWhatsAppFrom,
   getWhatsAppSessionWindowMs,
+  getTwilioWhatsAppCustomerTemplateSid,
   getTwilioWhatsAppDefaultTemplateSid,
+  getTwilioWhatsAppUserLogTemplateSid,
   isWithinWhatsAppSessionWindow,
   isTwilioWhatsAppConfigured,
   normalizeWhatsAppAddress,
@@ -11,7 +14,12 @@ import {
 } from '../services/twilioWhatsApp.js'
 import { isDbConnected } from '../config/db.js'
 import { WhatsAppSession } from '../models/WhatsAppSession.js'
+import { Activity } from '../models/Activity.js'
 import { WhatsAppPendingDelivery } from '../models/WhatsAppPendingDelivery.js'
+import {
+  buildCustomerShareWhatsAppMessages,
+  canUserViewActivityForWhatsApp,
+} from '../services/customerShareWhatsAppMessages.js'
 
 const router = Router()
 
@@ -112,6 +120,8 @@ router.get('/config', protectRoute, (_req, res) => {
   res.json({
     configured: isTwilioWhatsAppConfigured(),
     defaultTemplateSid: getTwilioWhatsAppDefaultTemplateSid(),
+    customerTemplateSid: getTwilioWhatsAppCustomerTemplateSid(),
+    userLogTemplateSid: getTwilioWhatsAppUserLogTemplateSid(),
   })
 })
 
@@ -170,7 +180,7 @@ router.post('/send', protectRoute, async (req, res, next) => {
       })
     }
 
-    const { to, message, contentSid, contentVariables } = req.body || {}
+    const { to, message, contentSid, contentVariables, pendingActivityId } = req.body || {}
     if (!to || typeof to !== 'string') {
       return res.status(400).json({ error: 'Recipient phone number is required in "to"' })
     }
@@ -221,6 +231,39 @@ router.post('/send', protectRoute, async (req, res, next) => {
       contentVariables: sendTemplateVariables,
     })
 
+    let pendingLogQueued = false
+    const rawPendingId = typeof pendingActivityId === 'string' ? pendingActivityId.trim() : ''
+    if (sendTemplateSid && rawPendingId && isDbConnected()) {
+      if (!mongoose.Types.ObjectId.isValid(rawPendingId)) {
+        console.warn('[twilio][whatsapp][pending-log][invalid-activity-id]', { pendingActivityId: rawPendingId })
+      } else {
+        try {
+          const activity = await Activity.findById(rawPendingId).lean()
+          if (!activity || activity.isArchived) {
+            console.warn('[twilio][whatsapp][pending-log][activity-not-found]', { pendingActivityId: rawPendingId })
+          } else if (!canUserViewActivityForWhatsApp(activity, req.user)) {
+            console.warn('[twilio][whatsapp][pending-log][forbidden]', {
+              pendingActivityId: rawPendingId,
+              userId: String(req.user?._id || ''),
+            })
+          } else {
+            const messages = buildCustomerShareWhatsAppMessages(activity)
+            if (messages.length > 0) {
+              await WhatsAppPendingDelivery.create({
+                address: normalizedTo,
+                activityId: activity._id,
+                messages,
+                status: 'pending',
+              })
+              pendingLogQueued = true
+            }
+          }
+        } catch (err) {
+          console.warn('[twilio][whatsapp][pending-log][queue-failed]', err?.message || err)
+        }
+      }
+    }
+
     res.json({
       success: true,
       messageSid: sent.sid,
@@ -233,6 +276,7 @@ router.post('/send', protectRoute, async (req, res, next) => {
       sessionStateKnown,
       sessionWindowMs: getWhatsAppSessionWindowMs(),
       lastInboundAt,
+      pendingLogQueued,
     })
   } catch (err) {
     next(err)
