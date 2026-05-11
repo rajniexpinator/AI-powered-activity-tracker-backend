@@ -2,6 +2,8 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID
 const authToken = process.env.TWILIO_AUTH_TOKEN
 const fromNumber = process.env.TWILIO_WHATSAPP_FROM
 const defaultTemplateSid = process.env.TWILIO_WHATSAPP_TEMPLATE_SID
+const customerTemplateSid = process.env.TWILIO_WHATSAPP_CUSTOMER_TEMPLATE_SID
+const userLogTemplateSid = process.env.TWILIO_WHATSAPP_USER_LOG_TEMPLATE_SID
 const WHATSAPP_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export function normalizeWhatsAppAddress(value) {
@@ -30,6 +32,63 @@ export function getTwilioWhatsAppFrom() {
 
 export function getTwilioWhatsAppDefaultTemplateSid() {
   return typeof defaultTemplateSid === 'string' ? defaultTemplateSid.trim() : ''
+}
+
+/** Business-initiated template for customer (Chat “Send WhatsApp” when session closed). */
+export function getTwilioWhatsAppCustomerTemplateSid() {
+  const c = typeof customerTemplateSid === 'string' ? customerTemplateSid.trim() : ''
+  return c || getTwilioWhatsAppDefaultTemplateSid()
+}
+
+/** Template for internal user alerts when session closed (e.g. severity WhatsApp notify). */
+export function getTwilioWhatsAppUserLogTemplateSid() {
+  const u = typeof userLogTemplateSid === 'string' ? userLogTemplateSid.trim() : ''
+  return u || getTwilioWhatsAppDefaultTemplateSid()
+}
+
+/**
+ * Twilio/WhatsApp often rejects template variables with certain Unicode (e.g. em dash),
+ * newlines, or invalid JSON. Returns a compact JSON string safe to send as ContentVariables.
+ */
+export function normalizeTwilioWhatsAppContentVariables(raw) {
+  if (raw == null) return ''
+  let parsed
+  if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (!s) return ''
+    try {
+      parsed = JSON.parse(s)
+    } catch {
+      return ''
+    }
+  } else if (typeof raw === 'object' && !Array.isArray(raw)) {
+    parsed = raw
+  } else {
+    return ''
+  }
+  const out = {}
+  for (const [k, v] of Object.entries(parsed)) {
+    const key = String(k).trim()
+    if (!key) continue
+    let val =
+      v === null || v === undefined
+        ? ''
+        : typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+          ? String(v)
+          : JSON.stringify(v)
+    val = val
+      .replace(/\r\n|\r|\n/g, ' ')
+      .replace(/[\u2012\u2013\u2014\u2015\u2212]/g, '-') // fancy dashes → ASCII
+      .replace(/\u00A0/g, ' ')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!val) val = 'N/A'
+    if (val.length > 1020) val = val.slice(0, 1020)
+    out[key] = val
+  }
+  if (Object.keys(out).length === 0) return ''
+  return JSON.stringify(out)
 }
 
 /**
@@ -67,8 +126,9 @@ export async function sendTwilioWhatsAppMessage({ to, body, contentSid, contentV
     form.set('Body', bodyText)
   } else {
     form.set('ContentSid', templateSid)
-    if (typeof contentVariables === 'string' && contentVariables.trim()) {
-      form.set('ContentVariables', contentVariables.trim())
+    const normalizedVars = normalizeTwilioWhatsAppContentVariables(contentVariables)
+    if (normalizedVars) {
+      form.set('ContentVariables', normalizedVars)
     }
   }
 

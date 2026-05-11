@@ -22,7 +22,11 @@ import {
   groupActivitiesByCustomer,
 } from '../services/weeklyActivityExcel.js'
 import {
-  getTwilioWhatsAppDefaultTemplateSid,
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+  getTwilioWhatsAppUserLogTemplateSid,
   isTwilioWhatsAppConfigured,
   isWithinWhatsAppSessionWindow,
   normalizeWhatsAppAddress,
@@ -200,6 +204,20 @@ function formatLocalDateTime(value) {
   return dt.toLocaleString()
 }
 
+function formatActivityLogIdForWhatsApp(activity) {
+  const dt = activity?.createdAt ? new Date(activity.createdAt) : new Date()
+  if (Number.isNaN(dt.getTime())) {
+    const id = activity?._id ? String(activity._id) : 'unknown'
+    return `LOG-${id.slice(-8)}`
+  }
+  const y = dt.getFullYear()
+  const mo = String(dt.getMonth() + 1).padStart(2, '0')
+  const da = String(dt.getDate()).padStart(2, '0')
+  const hh = String(dt.getHours()).padStart(2, '0')
+  const mm = String(dt.getMinutes()).padStart(2, '0')
+  return `LOG-${y}${mo}${da}-${hh}${mm}`
+}
+
 function splitMessage(text, chunkSize = 1400) {
   const source = typeof text === 'string' ? text.trim() : ''
   if (!source) return []
@@ -280,7 +298,7 @@ async function dispatchSeverityWhatsAppNotifications(activity, actorUserId) {
           continue
         }
 
-        const templateSid = getTwilioWhatsAppDefaultTemplateSid()
+        const templateSid = getTwilioWhatsAppUserLogTemplateSid()
         if (!templateSid) {
           console.warn('[whatsapp][severity-notify][template-missing]', {
             recipient: recipient.email || recipient._id,
@@ -290,11 +308,19 @@ async function dispatchSeverityWhatsAppNotifications(activity, actorUserId) {
           continue
         }
 
+        const recipientName = typeof recipient.name === 'string' ? recipient.name.trim() : ''
+        const greeting =
+          recipientName.split(/\s+/).filter(Boolean)[0] || (typeof recipient.email === 'string' && recipient.email.trim()
+            ? recipient.email.trim().split('@')[0]
+            : 'there')
+
         await sendTwilioWhatsAppMessage({
           to: toAddress,
           contentSid: templateSid,
           contentVariables: JSON.stringify({
-            1: customer || 'Customer',
+            1: greeting.slice(0, 120),
+            2: formatActivityLogIdForWhatsApp(activity).slice(0, 120),
+            3: (formatLocalDateTime(activity.createdAt) || new Date().toLocaleString()).slice(0, 120),
           }),
         })
         await WhatsAppPendingDelivery.create({
