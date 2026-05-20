@@ -3,24 +3,9 @@
  * Used with WhatsAppPendingDelivery — template first, then flush on inbound webhook.
  */
 
-function refToId(ref) {
-  if (ref == null) return ''
-  if (typeof ref === 'object' && ref !== null && ref._id != null) return String(ref._id)
-  return String(ref)
-}
-
-function isCollaborator(activity, user) {
-  if (!activity || !user) return false
-  const uid = String(user._id)
-  const shared = Array.isArray(activity.sharedWith) ? activity.sharedWith : []
-  return shared.some((entry) => refToId(entry) === uid)
-}
-
 export function canUserViewActivityForWhatsApp(activity, user) {
   if (!activity || activity.isArchived || !user) return false
-  if (user.role === 'admin') return true
-  if (refToId(activity.userId) === String(user._id)) return true
-  return isCollaborator(activity, user)
+  return true
 }
 
 function formatLocalDateTime(value) {

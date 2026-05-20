@@ -78,10 +78,84 @@ function isCollaborator(activity, user) {
 }
 
 function canViewActivity(activity, user) {
-  if (!activity || activity.isArchived) return false
-  if (user.role === 'admin') return true
-  if (refToId(activity.userId) === String(user._id)) return true
-  return isCollaborator(activity, user)
+  if (!activity || !user) return false
+  if (activity.isArchived) return user.role === 'admin'
+  return true
+}
+
+function parseCustomersQuery(query) {
+  if (!query || typeof query !== 'object') return []
+  const names = new Set()
+  const raw = query.customers
+  if (typeof raw === 'string' && raw.trim()) {
+    for (const part of raw.split(',')) {
+      const t = part.trim()
+      if (t) names.add(t)
+    }
+  } else if (Array.isArray(raw)) {
+    for (const part of raw) {
+      if (typeof part === 'string' && part.trim()) names.add(part.trim())
+    }
+  }
+  if (typeof query.customer === 'string' && query.customer.trim()) {
+    names.add(query.customer.trim())
+  }
+  return [...names]
+}
+
+function applyCustomerFilter(filter, query) {
+  const customers = parseCustomersQuery(query)
+  if (customers.length === 1) {
+    filter.customer = customers[0]
+  } else if (customers.length > 1) {
+    filter.customer = { $in: customers }
+  }
+}
+
+function createdAtRangeFromPeriod(period) {
+  const key = typeof period === 'string' ? period.trim().toLowerCase() : ''
+  if (!key || key === 'all') return null
+  const end = new Date()
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  switch (key) {
+    case 'today':
+      break
+    case '3days':
+      start.setDate(start.getDate() - 2)
+      break
+    case 'week':
+      start.setDate(start.getDate() - 6)
+      break
+    case '2weeks':
+      start.setDate(start.getDate() - 13)
+      break
+    case 'month':
+      start.setMonth(start.getMonth() - 1)
+      break
+    default:
+      return null
+  }
+  return { $gte: start, $lte: end }
+}
+
+function applyCreatedAtFilter(filter, query) {
+  const periodRange = createdAtRangeFromPeriod(query?.period)
+  if (periodRange) {
+    filter.createdAt = periodRange
+    return
+  }
+  if (typeof query?.from !== 'string' && typeof query?.to !== 'string') return
+  const createdAt = {}
+  if (typeof query.from === 'string' && query.from) {
+    const fromDate = new Date(query.from)
+    if (!Number.isNaN(fromDate.getTime())) createdAt.$gte = fromDate
+  }
+  if (typeof query.to === 'string' && query.to) {
+    const toDate = new Date(query.to)
+    if (!Number.isNaN(toDate.getTime())) createdAt.$lte = toDate
+  }
+  if (Object.keys(createdAt).length > 0) filter.createdAt = createdAt
 }
 
 /** Optional filter: structuredData.severity is 0 (all good), 1 (low), 2 (medium), or 3 (high). Query: severity=3 or minSeverity=2 */
@@ -406,21 +480,20 @@ router.post('/', protectRoute, async (req, res, next) => {
 })
 
 // GET /api/activities
-// Query (optional): limit (default 20), page (default 1)
-// Returns recent activities for the logged-in user, newest first. Paginated.
+// Query (optional): limit (default 100), page, period (today|3days|week|2weeks|month|all), customers, from, to
+// Returns all team activities (non-archived), newest first. Paginated.
 router.get('/', protectRoute, async (req, res, next) => {
   try {
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
     const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
-    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 20 : rawLimit, 1), 100)
+    const limit = Math.min(Math.max(Number.isNaN(rawLimit) ? 100 : rawLimit, 1), 200)
     const page = Math.max(Number.isNaN(rawPage) ? 1 : rawPage, 1)
     const skip = (page - 1) * limit
 
     const uid = req.user._id
-    const filter = {
-      isArchived: false,
-      $or: [{ userId: uid }, { sharedWith: uid }],
-    }
+    const filter = { isArchived: false }
+    applyCustomerFilter(filter, req.query)
+    applyCreatedAtFilter(filter, req.query)
     const [rows, total] = await Promise.all([
       Activity.find(filter)
         .sort({ createdAt: -1 })
@@ -470,11 +543,11 @@ router.get('/today-count', protectRoute, async (req, res, next) => {
 })
 
 // GET /api/activities/admin
-// Admin: view all employee activity with optional filters. Paginated.
-// Query: userId, customer, from, to, limit, page, severity, minSeverity
-router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
+// All authenticated users: view team activity with optional filters. Paginated.
+// Query: userId, customer, customers, period, from, to, limit, page, severity, minSeverity
+router.get('/admin', protectRoute, async (req, res, next) => {
   try {
-    const { userId, customer, from, to } = req.query
+    const { userId } = req.query
 
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
     const rawPage = typeof req.query.page === 'string' ? parseInt(req.query.page, 10) : NaN
@@ -488,31 +561,9 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
       filter.userId = userId
     }
 
-    if (typeof customer === 'string' && customer.trim()) {
-      filter.customer = customer.trim()
-    }
-
+    applyCustomerFilter(filter, req.query)
     applyStructuredSeverityFilter(filter, req.query)
-
-    if (typeof from === 'string' || typeof to === 'string') {
-      const createdAt = {}
-      if (typeof from === 'string' && from) {
-        const fromDate = new Date(from)
-        if (!Number.isNaN(fromDate.getTime())) {
-          createdAt.$gte = fromDate
-        }
-      }
-      if (typeof to === 'string' && to) {
-        const toDate = new Date(to)
-        if (!Number.isNaN(toDate.getTime())) {
-          // include entire day if only a date is passed
-          createdAt.$lte = toDate
-        }
-      }
-      if (Object.keys(createdAt).length > 0) {
-        filter.createdAt = createdAt
-      }
-    }
+    applyCreatedAtFilter(filter, req.query)
 
     const [activities, total] = await Promise.all([
       Activity.find(filter)
@@ -549,30 +600,9 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       filter.userId = userId
     }
 
-    if (typeof customer === 'string' && customer.trim()) {
-      filter.customer = customer.trim()
-    }
-
+    applyCustomerFilter(filter, req.query)
     applyStructuredSeverityFilter(filter, req.query)
-
-    if (typeof from === 'string' || typeof to === 'string') {
-      const createdAt = {}
-      if (typeof from === 'string' && from) {
-        const fromDate = new Date(from)
-        if (!Number.isNaN(fromDate.getTime())) {
-          createdAt.$gte = fromDate
-        }
-      }
-      if (typeof to === 'string' && to) {
-        const toDate = new Date(to)
-        if (!Number.isNaN(toDate.getTime())) {
-          createdAt.$lte = toDate
-        }
-      }
-      if (Object.keys(createdAt).length > 0) {
-        filter.createdAt = createdAt
-      }
-    }
+    applyCreatedAtFilter(filter, req.query)
 
     const activities = await Activity.find(filter)
       .sort({ createdAt: -1 })
@@ -666,14 +696,12 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
       filter.userId = userId
     }
 
-    if (typeof customer === 'string' && customer.trim()) {
-      filter.customer = customer.trim()
-    }
-
+    applyCustomerFilter(filter, req.query)
     applyStructuredSeverityFilter(filter, req.query)
 
     const hasFrom = typeof from === 'string' && from.trim()
     const hasTo = typeof to === 'string' && to.trim()
+    const periodRange = createdAtRangeFromPeriod(req.query?.period)
     let weekMondays
     let periodSummary
     let fnameStem
@@ -693,6 +721,16 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
       }
       periodSummary = `Reporting period: ${String(from).slice(0, 10)} to ${String(to).slice(0, 10)} — same filters as Generate weekly AI report.`
       fnameStem = `${String(from).slice(0, 10)}_to_${String(to).slice(0, 10)}`
+    } else if (periodRange) {
+      filter.createdAt = periodRange
+      weekMondays = enumerateWeekMondays(periodRange.$gte, periodRange.$lte)
+      if (weekMondays.length === 0) {
+        weekMondays = [getMondayOfWeekContaining(periodRange.$gte)]
+      }
+      const fromLabel = periodRange.$gte.toISOString().slice(0, 10)
+      const toLabel = periodRange.$lte.toISOString().slice(0, 10)
+      periodSummary = `Reporting period: ${fromLabel} to ${toLabel} (${req.query.period}).`
+      fnameStem = `${fromLabel}_to_${toLabel}`
     } else {
       const rawWeekEnd =
         typeof req.query.weekEnd === 'string' && req.query.weekEnd.trim()
@@ -767,20 +805,9 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
     const filter = { isArchived: true }
 
     if (typeof userId === 'string' && userId) filter.userId = userId
-    if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
+    applyCustomerFilter(filter, req.query)
     applyStructuredSeverityFilter(filter, req.query)
-    if (typeof from === 'string' || typeof to === 'string') {
-      const createdAt = {}
-      if (typeof from === 'string' && from) {
-        const fromDate = new Date(from)
-        if (!Number.isNaN(fromDate.getTime())) createdAt.$gte = fromDate
-      }
-      if (typeof to === 'string' && to) {
-        const toDate = new Date(to)
-        if (!Number.isNaN(toDate.getTime())) createdAt.$lte = toDate
-      }
-      if (Object.keys(createdAt).length > 0) filter.createdAt = createdAt
-    }
+    applyCreatedAtFilter(filter, req.query)
 
     const [activities, total] = await Promise.all([
       Activity.find(filter)
@@ -938,7 +965,7 @@ router.patch('/:id/share', protectRoute, async (req, res, next) => {
 })
 
 // POST /api/activities/:id/notes
-// Owner, admin, or anyone in sharedWith can append a collaboration note.
+// Any authenticated user can append a collaboration note on a non-archived log.
 router.post('/:id/notes', protectRoute, async (req, res, next) => {
   try {
     const { id } = req.params
@@ -959,12 +986,6 @@ router.post('/:id/notes', protectRoute, async (req, res, next) => {
 
     if (!canViewActivity(activity, req.user)) {
       return res.status(403).json({ error: 'Forbidden — you cannot access this activity' })
-    }
-
-    const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
-    if (!isOwner && !isAdmin && !isCollaborator(activity, req.user)) {
-      return res.status(403).json({ error: 'Forbidden — only collaborators can add notes on this log' })
     }
 
     const n = Array.isArray(activity.collaborationNotes) ? activity.collaborationNotes.length : 0
@@ -1031,7 +1052,7 @@ router.delete('/:id', protectRoute, async (req, res, next) => {
 })
 
 // PATCH /api/activities/:id
-// Update an existing activity (owner or admin), for past-submission edits.
+// Update an existing activity (any authenticated user), for past-submission edits.
 // Body (at least one): { rawText?: string, structured?: any, images?: string[] }
 router.patch('/:id', protectRoute, async (req, res, next) => {
   try {
@@ -1045,9 +1066,7 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
       return res.status(404).json({ error: 'Activity not found' })
     }
 
-    const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
-    if (!isOwner && !isAdmin) {
+    if (!canViewActivity(activity, req.user)) {
       return res.status(403).json({ error: 'Forbidden — you cannot edit this activity' })
     }
 
@@ -1467,28 +1486,8 @@ router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (r
       filter.userId = userId
     }
 
-    if (typeof customer === 'string' && customer.trim()) {
-      filter.customer = customer.trim()
-    }
-
-    if (from || to) {
-      const createdAt = {}
-      if (from) {
-        const fromDate = new Date(from)
-        if (!Number.isNaN(fromDate.getTime())) {
-          createdAt.$gte = fromDate
-        }
-      }
-      if (to) {
-        const toDate = new Date(to)
-        if (!Number.isNaN(toDate.getTime())) {
-          createdAt.$lte = toDate
-        }
-      }
-      if (Object.keys(createdAt).length > 0) {
-        filter.createdAt = createdAt
-      }
-    }
+    applyCustomerFilter(filter, req.body || {})
+    applyCreatedAtFilter(filter, req.body || {})
 
     const activities = await Activity.find(filter)
       .sort({ createdAt: -1 })

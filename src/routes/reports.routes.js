@@ -32,11 +32,61 @@ function applyStructuredSeverityFilter(filter, query) {
   }
 }
 
-function buildActivityFilter({ userId, customer, from, to, archived, severity, minSeverity }) {
+function parseCustomersInput(body) {
+  if (!body || typeof body !== 'object') return []
+  const names = new Set()
+  const raw = body.customers
+  if (Array.isArray(raw)) {
+    for (const part of raw) {
+      if (typeof part === 'string' && part.trim()) names.add(part.trim())
+    }
+  } else if (typeof raw === 'string' && raw.trim()) {
+    for (const part of raw.split(',')) {
+      const t = part.trim()
+      if (t) names.add(t)
+    }
+  }
+  if (typeof body.customer === 'string' && body.customer.trim()) names.add(body.customer.trim())
+  return [...names]
+}
+
+function createdAtRangeFromPeriod(period) {
+  const key = typeof period === 'string' ? period.trim().toLowerCase() : ''
+  if (!key || key === 'all') return null
+  const end = new Date()
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  switch (key) {
+    case 'today':
+      break
+    case '3days':
+      start.setDate(start.getDate() - 2)
+      break
+    case 'week':
+      start.setDate(start.getDate() - 6)
+      break
+    case '2weeks':
+      start.setDate(start.getDate() - 13)
+      break
+    case 'month':
+      start.setMonth(start.getMonth() - 1)
+      break
+    default:
+      return null
+  }
+  return { $gte: start, $lte: end }
+}
+
+function buildActivityFilter({ userId, customer, customers, period, from, to, archived, severity, minSeverity }) {
   const filter = { isArchived: Boolean(archived) }
   if (typeof userId === 'string' && userId) filter.userId = userId
-  if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
-  if (from || to) {
+  const customerNames = customers?.length ? customers : customer ? [customer] : []
+  if (customerNames.length === 1) filter.customer = customerNames[0]
+  else if (customerNames.length > 1) filter.customer = { $in: customerNames }
+  const periodRange = createdAtRangeFromPeriod(period)
+  if (periodRange) {
+    filter.createdAt = periodRange
+  } else if (from || to) {
     const createdAt = {}
     if (from) createdAt.$gte = from
     if (to) createdAt.$lte = to
@@ -53,17 +103,22 @@ function buildActivityFilter({ userId, customer, from, to, archived, severity, m
 
 router.post('/generate', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { userId, customer, from, to, limit, includeCustomerSummaries, severity, minSeverity } = req.body || {}
+    const body = req.body || {}
+    const { userId, customer, from, to, limit, includeCustomerSummaries, severity, minSeverity, period } = body
+    const customers = parseCustomersInput(body)
 
     const rawLimit = typeof limit === 'number' ? limit : NaN
     const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
 
     const fromDate = parseDateOrUndefined(from)
     const toDate = parseDateOrUndefined(to)
+    const useCustomDates = Boolean(fromDate || toDate)
 
     const filter = buildActivityFilter({
       userId,
       customer,
+      customers,
+      period: !useCustomDates && typeof period === 'string' ? period : undefined,
       from: fromDate,
       to: toDate,
       archived: false,
