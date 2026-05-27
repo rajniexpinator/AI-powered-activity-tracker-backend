@@ -34,6 +34,9 @@ You must respond with a single JSON object that matches this schema:
   "issue": string | null,                // The specific problem/defect/concern described (for CSV column)
   "resolution": string | null,           // What was done/decided to address the issue (for CSV column)
   "part_name": string | null,             // e.g. "wheel liner", "BCM", "IP", etc.
+  "part_number": string | null,           // Supplier / plant part number (from barcode scan text or description)
+  "supplier_code": string | null,         // Up to 5 chars — supplier shorthand code; letters/digits only, uppercased
+  "vehicle_line": string[],               // Zero or more of: "Super Duty", "Expedition", "Navigator"
   "concern_id": string | null,            // e.g. "Z1900210" or other plant concern / ticket number
   "dtc_code": string | null,              // e.g. "DTC U3000-49" if present
   "intent": string | null,                // What the Apex employee was trying to achieve
@@ -53,6 +56,9 @@ Rules:
 - ALWAYS return valid JSON (no comments, no trailing commas).
 - "severity": Use 0 when the Apex employee is talking with the operator and everything is normal/no issue. Use 1 (low) for minor observations. Use 2 (medium) for standard quality issues with moderate impact. Use 3 (high) only when the text clearly signals major impact (e.g. line stop, safety, recall risk, repeated customer escalation). Use null if you cannot infer severity—the user will choose before saving.
 - "location": A short 1–5 character physical-location tag at the plant (e.g. "A12", "B-7", "ZN102"). Look for phrases like "at A12", "in cell B-7", "line ZN102", "dock 4". Only return letters, digits and dashes (uppercased) and at most 5 characters. If no location is mentioned, return null.
+- "part_number": Extract when the text mentions a part number, barcode mapping line "Part number: …", or a code in parentheses after a part name. Do not duplicate part_name into part_number.
+- "supplier_code": Up to 5 characters, letters and digits only (uppercased). Only when clearly stated; otherwise null.
+- "vehicle_line": Include only values from this exact list when mentioned or implied: "Super Duty", "Expedition", "Navigator". Multiple allowed; empty array if none.
 - If some field is unknown, use null (or [] for arrays) instead of guessing wildly.
 - Keep "tags" short and machine-friendly (lowercase, hyphen-separated).
 - Use the domain of Apex Quality Control: Apex employees are onsite at OEM plants (mainly Ford) representing suppliers.
