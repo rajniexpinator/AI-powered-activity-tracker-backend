@@ -33,6 +33,7 @@ const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
 const MAX_ATTACHMENTS_PER_ENTRY = 10
 const MAX_MS365_ATTACHMENT_BYTES = 3 * 1024 * 1024
+const MAX_SHARE_MEDIA_BYTES = 12 * 1024 * 1024
 const MAX_SHARED_USERS = 30
 const MAX_COLLAB_NOTES = 200
 const MAX_LOCATION_LENGTH = 5
@@ -243,6 +244,39 @@ async function fetchRemoteAttachment({ url, fallbackName, preferredName, preferr
     contentType,
     contentBytesBase64: buffer.toString('base64'),
   }
+}
+
+function mediaUrlsForActivity(activity) {
+  const urls = []
+  if (Array.isArray(activity.images)) {
+    for (const u of activity.images) {
+      if (typeof u === 'string' && u.trim()) urls.push(u.trim())
+    }
+  }
+  if (Array.isArray(activity.attachments)) {
+    for (const a of activity.attachments) {
+      const u = a && typeof a.url === 'string' ? a.url.trim() : ''
+      if (u) urls.push(u)
+    }
+  }
+  return urls
+}
+
+function urlsReferToSameMedia(requested, allowed) {
+  if (!requested || !allowed) return false
+  if (requested === allowed) return true
+  try {
+    const a = new URL(requested)
+    const b = new URL(allowed)
+    return a.origin === b.origin && a.pathname === b.pathname
+  } catch {
+    return false
+  }
+}
+
+function isAllowedActivityMediaUrl(requested, activity) {
+  const allowed = mediaUrlsForActivity(activity)
+  return allowed.some((u) => urlsReferToSameMedia(requested, u))
 }
 
 function normalizeAttachments(raw) {
@@ -1435,6 +1469,64 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
       sourceCount: allSources.length,
       skipped,
     })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/activities/:id/share-media?url=...
+// Proxies S3 (and other remote) media for native share — avoids browser CORS on direct S3 URLs.
+router.get('/:id/share-media', protectRoute, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : ''
+    if (!id) {
+      return res.status(400).json({ error: 'Activity id is required' })
+    }
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'url query parameter is required' })
+    }
+
+    let parsed
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return res.status(400).json({ error: 'Invalid url' })
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return res.status(400).json({ error: 'Invalid url protocol' })
+    }
+
+    const activity = await Activity.findById(id).lean()
+    if (!activity || activity.isArchived) {
+      return res.status(404).json({ error: 'Activity not found' })
+    }
+    if (!canViewActivity(activity, req.user)) {
+      return res.status(403).json({ error: 'Forbidden — you cannot view this activity' })
+    }
+    if (!isAllowedActivityMediaUrl(rawUrl, activity)) {
+      return res.status(403).json({ error: 'URL is not part of this activity' })
+    }
+
+    const response = await fetch(rawUrl)
+    if (!response.ok) {
+      return res.status(502).json({ error: `Download failed (${response.status})` })
+    }
+
+    const contentType = (response.headers.get('content-type') || 'application/octet-stream').split(';')[0]
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length === 0) {
+      return res.status(502).json({ error: 'Downloaded file is empty' })
+    }
+    if (buffer.length > MAX_SHARE_MEDIA_BYTES) {
+      return res.status(413).json({
+        error: `File exceeds ${Math.floor(MAX_SHARE_MEDIA_BYTES / (1024 * 1024))} MB share limit`,
+      })
+    }
+
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', 'private, max-age=300')
+    res.send(buffer)
   } catch (err) {
     next(err)
   }
