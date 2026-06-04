@@ -4,8 +4,29 @@ import { Activity } from '../models/Activity.js'
 import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 import { buildReportImageGallery } from '../services/reportImageGallery.js'
+import { renderWeeklyReportPdf } from '../services/reportPdf.js'
+import { generateReportFromParams, inferDateMode } from '../services/reportGeneration.js'
 
 const router = Router()
+
+function buildReportPdfTitle(report) {
+  const titleParts = ['Weekly quality report']
+  if (report?.from || report?.to) {
+    const fromLabel = report.from ? new Date(report.from).toLocaleDateString() : ''
+    const toLabel = report.to ? new Date(report.to).toLocaleDateString() : ''
+    const range = `${fromLabel}${fromLabel && toLabel ? ' to ' : ''}${toLabel}`.trim()
+    if (range) titleParts.push(range)
+  }
+  if (report?.customer) titleParts.push(String(report.customer))
+  return titleParts.join(' – ')
+}
+
+function safePdfFilename(report) {
+  const customer = typeof report?.customer === 'string' && report.customer.trim() ? report.customer.trim() : 'report'
+  const safe = customer.replace(/[^\w.\-() ]+/g, '_').slice(0, 60) || 'report'
+  const date = report?.createdAt ? new Date(report.createdAt).toISOString().slice(0, 10) : 'export'
+  return `weekly-report-${safe}-${date}.pdf`
+}
 
 function parseDateOrUndefined(value) {
   if (typeof value !== 'string' || !value) return undefined
@@ -148,6 +169,12 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
     const minSevRaw = minSeverity != null && minSeverity !== '' ? parseInt(String(minSeverity).trim(), 10) : NaN
     if (!Number.isNaN(minSevRaw) && minSevRaw >= 0 && minSevRaw <= 3) issueSeverityMin = minSevRaw
 
+    const dateMode = inferDateMode({
+      period: !useCustomDates && typeof period === 'string' ? period : undefined,
+      aiQuestion: typeof body.aiQuestion === 'string' ? body.aiQuestion : undefined,
+      dateMode: typeof body.dateMode === 'string' ? body.dateMode : undefined,
+    })
+
     const saved = await Report.create({
       createdBy: req.user._id,
       scopeRole: req.user.role,
@@ -155,6 +182,9 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       customer: typeof customer === 'string' && customer.trim() ? customer.trim() : undefined,
       from: fromDate,
       to: toDate,
+      period: !useCustomDates && typeof period === 'string' ? period.trim() : undefined,
+      dateMode,
+      aiQuestion: typeof body.aiQuestion === 'string' && body.aiQuestion.trim() ? body.aiQuestion.trim() : undefined,
       includeCustomerSummaries: Boolean(includeCustomerSummaries),
       issueSeverityExact,
       issueSeverityMin,
@@ -195,6 +225,113 @@ router.get('/', protectRoute, requireRole('admin'), async (req, res, next) => {
 
     const totalPages = Math.max(1, Math.ceil(total / limit))
     res.json({ reports, total, page, limit, totalPages })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/reports/:id/regenerate — update filters and re-run AI narrative
+router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const existing = await Report.findById(req.params.id)
+    if (!existing) return res.status(404).json({ error: 'Report not found' })
+    if (String(existing.createdBy) !== String(req.user._id)) {
+      return res.status(403).json({ error: 'Forbidden — you cannot edit this report' })
+    }
+
+    const body = req.body || {}
+    const params = {
+      userId: body.userId !== undefined ? body.userId : existing.userId?.toString(),
+      customer: body.customer !== undefined ? body.customer : existing.customer,
+      from: body.from !== undefined ? body.from : existing.from,
+      to: body.to !== undefined ? body.to : existing.to,
+      period: body.period !== undefined ? body.period : existing.period,
+      dateMode: body.dateMode !== undefined ? body.dateMode : existing.dateMode,
+      aiQuestion: body.aiQuestion !== undefined ? body.aiQuestion : existing.aiQuestion,
+      includeCustomerSummaries:
+        body.includeCustomerSummaries !== undefined
+          ? body.includeCustomerSummaries
+          : existing.includeCustomerSummaries,
+      severity:
+        body.severity !== undefined
+          ? body.severity
+          : existing.issueSeverityExact != null
+            ? existing.issueSeverityExact
+            : undefined,
+      minSeverity:
+        body.minSeverity !== undefined
+          ? body.minSeverity
+          : existing.issueSeverityMin != null
+            ? existing.issueSeverityMin
+            : undefined,
+      limit: body.limit,
+    }
+
+    const generated = await generateReportFromParams(params)
+
+    let issueSeverityExact = existing.issueSeverityExact
+    let issueSeverityMin = existing.issueSeverityMin
+    const sevRaw = body.severity != null && body.severity !== '' ? parseInt(String(body.severity).trim(), 10) : NaN
+    if (!Number.isNaN(sevRaw) && sevRaw >= 0 && sevRaw <= 3) {
+      issueSeverityExact = sevRaw
+      issueSeverityMin = undefined
+    } else if (body.minSeverity != null && body.minSeverity !== '') {
+      const minSevRaw = parseInt(String(body.minSeverity).trim(), 10)
+      if (!Number.isNaN(minSevRaw) && minSevRaw >= 0 && minSevRaw <= 3) {
+        issueSeverityMin = minSevRaw
+        issueSeverityExact = undefined
+      }
+    }
+
+    existing.customer = typeof params.customer === 'string' && params.customer.trim() ? params.customer.trim() : undefined
+    existing.from = generated.from ? new Date(generated.from) : parseDateOrUndefined(params.from)
+    existing.to = generated.to ? new Date(generated.to) : parseDateOrUndefined(params.to)
+    existing.period = typeof params.period === 'string' ? params.period : undefined
+    existing.dateMode = inferDateMode({
+      period: params.period,
+      dateMode: params.dateMode,
+      aiQuestion: params.aiQuestion,
+    })
+    existing.aiQuestion = typeof params.aiQuestion === 'string' && params.aiQuestion.trim() ? params.aiQuestion.trim() : undefined
+    existing.includeCustomerSummaries = Boolean(params.includeCustomerSummaries)
+    existing.issueSeverityExact = issueSeverityExact
+    existing.issueSeverityMin = issueSeverityMin
+    existing.content = generated.content
+    existing.activityCount = generated.activityCount
+    existing.imageGallery = generated.imageGallery?.length ? generated.imageGallery : undefined
+    await existing.save()
+
+    res.json({
+      report: existing.content,
+      reportId: existing._id,
+      imageGallery: existing.imageGallery,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/reports/:id/pdf
+router.get('/:id/pdf', protectRoute, requireRole('admin'), async (req, res, next) => {
+  try {
+    const report = await Report.findById(req.params.id).lean()
+    if (!report) return res.status(404).json({ error: 'Report not found' })
+    if (String(report.createdBy) !== String(req.user._id)) {
+      return res.status(403).json({ error: 'Forbidden — you cannot view this report' })
+    }
+
+    const title = buildReportPdfTitle(report)
+    const pdf = await renderWeeklyReportPdf({
+      title,
+      content: report.content,
+      imageGallery: Array.isArray(report.imageGallery) ? report.imageGallery : [],
+    })
+
+    const filename = safePdfFilename(report)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('Content-Length', String(pdf.length))
+    res.send(pdf)
   } catch (err) {
     next(err)
   }

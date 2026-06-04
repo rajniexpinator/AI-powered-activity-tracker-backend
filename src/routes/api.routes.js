@@ -5,6 +5,7 @@ import { activitiesRouter } from './activities.routes.js'
 import { customersRouter } from './customers.routes.js'
 import { uploadRouter } from './upload.routes.js'
 import { reportsRouter } from './reports.routes.js'
+import { reportDashboardRouter } from './reportDashboard.routes.js'
 import { ms365Router } from './ms365.routes.js'
 import { barcodesRouter } from './barcodes.routes.js'
 import { employeeFilesRouter } from './employeeFiles.routes.js'
@@ -27,6 +28,7 @@ router.use('/activities', activitiesRouter)
 router.use('/customers', customersRouter)
 router.use('/upload', uploadRouter)
 router.use('/reports', reportsRouter)
+router.use('/report-dashboard', reportDashboardRouter)
 router.use('/ms365', ms365Router)
 router.use('/barcodes', barcodesRouter)
 router.use('/employee-files', employeeFilesRouter)

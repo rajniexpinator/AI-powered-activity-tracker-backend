@@ -12,6 +12,7 @@ import { Report } from '../models/Report.js'
 import { generateWeeklyQualityReport } from '../services/activityReporting.js'
 import { buildReportImageGallery } from '../services/reportImageGallery.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from '../services/activityAiQuery.js'
+import { inferDateMode } from '../services/reportGeneration.js'
 import { generateActivityAnswer } from '../services/activityAiAnswer.js'
 import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
 import {
@@ -1273,6 +1274,9 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
 
     const imageGallery = buildReportImageGallery(activities)
 
+    const aiQuestion = question.trim()
+    const dateMode = inferDateMode({ aiQuestion })
+
     const saved = await Report.create({
       createdBy: req.user._id,
       scopeRole: req.user.role,
@@ -1280,6 +1284,8 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       customer: typeof plan.customerSubstring === 'string' && plan.customerSubstring.trim() ? plan.customerSubstring.trim() : undefined,
       from: plan.from ? new Date(plan.from) : undefined,
       to: plan.to ? new Date(plan.to) : undefined,
+      dateMode,
+      aiQuestion,
       includeCustomerSummaries: false,
       content: report,
       model: 'gpt-4o-mini',

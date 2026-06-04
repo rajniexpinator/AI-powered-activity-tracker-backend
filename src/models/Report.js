@@ -10,6 +10,10 @@ const reportSchema = new mongoose.Schema(
     customer: { type: String, trim: true }, // optional single-customer report
     from: { type: Date },
     to: { type: Date },
+    period: { type: String, trim: true },
+    /** When "today", re-run uses the calendar day the user opens the report. */
+    dateMode: { type: String, enum: ['fixed', 'today'], default: 'fixed' },
+    aiQuestion: { type: String, trim: true },
 
     includeCustomerSummaries: { type: Boolean, default: false },
 
