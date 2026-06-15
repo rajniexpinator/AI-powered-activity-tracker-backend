@@ -1,20 +1,6 @@
-/**
- * Build free-form WhatsApp chunks for a customer after they reply (24h session).
- * Used with WhatsAppPendingDelivery — template first, then flush on inbound webhook.
- */
+const TEAMS_MESSAGE_CHUNK_SIZE = 3500
 
-export function canUserViewActivityForWhatsApp(activity, user) {
-  if (!activity || activity.isArchived || !user) return false
-  return true
-}
-
-function formatLocalDateTime(value) {
-  const dt = value ? new Date(value) : new Date()
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toLocaleString()
-}
-
-function splitMessage(text, chunkSize = 1400) {
+function splitMessage(text, chunkSize = TEAMS_MESSAGE_CHUNK_SIZE) {
   const source = typeof text === 'string' ? text.trim() : ''
   if (!source) return []
   if (source.length <= chunkSize) return [source]
@@ -27,7 +13,13 @@ function splitMessage(text, chunkSize = 1400) {
   return out
 }
 
-export function buildCustomerShareWhatsAppMessages(activity) {
+function formatLocalDateTime(value) {
+  const dt = value ? new Date(value) : new Date()
+  if (Number.isNaN(dt.getTime())) return ''
+  return dt.toLocaleString()
+}
+
+export function buildTeamsSeverityNotificationMessages(activity, severity) {
   if (!activity) return []
   const customer =
     typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Customer'
@@ -42,7 +34,7 @@ export function buildCustomerShareWhatsAppMessages(activity) {
       : summary
 
   const header =
-    `AI activity log\n` +
+    `New AI log added (Severity ${severity})\n` +
     `Customer: ${customer}\n` +
     `Location: ${location}\n` +
     `Summary: ${summary}\n` +
@@ -56,9 +48,18 @@ export function buildCustomerShareWhatsAppMessages(activity) {
     .filter((url) => typeof url === 'string' && url.trim())
     .map((url) => url.trim())
 
-  const messages = [header, ...splitMessage(`Full log:\n${rawConversation}`)]
+  const messages = [header, ...splitMessage(`Log details:\n${rawConversation}`)]
   if (attachmentUrls.length > 0) {
-    messages.push(...splitMessage(`Photos & files (open links):\n${attachmentUrls.join('\n')}`))
+    messages.push(...splitMessage(`Attachments:\n${attachmentUrls.join('\n')}`))
   }
   return messages.filter(Boolean)
+}
+
+export function buildSeverityAlertEmail(activity, severity) {
+  const customer =
+    typeof activity?.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Customer'
+  const messages = buildTeamsSeverityNotificationMessages(activity, severity)
+  const text = messages.join('\n\n')
+  const subject = `AI log alert — Severity ${severity} — ${customer}`
+  return { subject, text }
 }

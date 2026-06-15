@@ -7,8 +7,14 @@ const userSchema = new mongoose.Schema(
     name: { type: String, trim: true },
     role: { type: String, enum: ['admin', 'employee'], default: 'employee' },
     isActive: { type: Boolean, default: true },
-    whatsAppNumber: { type: String, trim: true, default: '' },
-    whatsAppNotifications: {
+    emailNotifications: {
+      enabled: { type: Boolean, default: false },
+      severityLevels: {
+        type: [{ type: Number, enum: [1, 2, 3] }],
+        default: [],
+      },
+    },
+    teamsNotifications: {
       enabled: { type: Boolean, default: false },
       severityLevels: {
         type: [{ type: Number, enum: [1, 2, 3] }],

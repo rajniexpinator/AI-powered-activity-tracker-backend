@@ -3,7 +3,8 @@ import { protectRoute, requireRole } from '../middleware/auth.js'
 import { isDbConnected } from '../config/db.js'
 import { Ms365RecipientConfig } from '../models/Ms365RecipientConfig.js'
 import { getDefaultMs365Recipients } from '../services/ms365Recipients.js'
-import { isMsGraphConfigured, createMs365Draft, sendMs365Draft } from '../services/msGraphMail.js'
+import { isMsGraphConfigured, createMs365Draft, sendMs365Draft, sendMs365Mail } from '../services/msGraphMail.js'
+import { isTeamsChatConfigured, sendTeamsChatMessages, diagnoseTeamsSetup } from '../services/msGraphTeams.js'
 import { createChatCompletion, getAssistantContent } from '../services/openai.js'
 import { Report } from '../models/Report.js'
 import { renderWeeklyReportPdf } from '../services/reportPdf.js'
@@ -215,6 +216,84 @@ Write only the body text (no subject line, no "To:" line).`.trim()
     })
 
     res.status(201).json({ draft })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/email/test-notification', protectRoute, async (req, res, next) => {
+  try {
+    if (!isMsGraphConfigured()) {
+      return res.status(503).json({ error: 'Microsoft 365 mail is not configured on the server' })
+    }
+
+    const recipientEmail = typeof req.user?.email === 'string' ? req.user.email.trim().toLowerCase() : ''
+    if (!recipientEmail) {
+      return res.status(400).json({ error: 'Your account has no email address' })
+    }
+
+    const recipientName =
+      typeof req.user?.name === 'string' && req.user.name.trim()
+        ? req.user.name.trim()
+        : recipientEmail.split('@')[0]
+    const now = new Date().toLocaleString()
+    const subject = 'Activity Tracker — test email alert'
+    const text =
+      `Activity Tracker — test email notification\n` +
+      `Hi ${recipientName},\n\n` +
+      `This is a test message from your profile settings. If you receive this email, severity log alerts are set up correctly.\n\n` +
+      `Sent: ${now}`
+
+    await sendMs365Mail({ to: recipientEmail, subject, text })
+    res.json({ success: true, to: recipientEmail })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/teams/diagnose', protectRoute, async (req, res, next) => {
+  try {
+    const recipientEmail = typeof req.user?.email === 'string' ? req.user.email.trim().toLowerCase() : ''
+    const report = await diagnoseTeamsSetup(recipientEmail)
+    res.json(report)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/teams/test-notification', protectRoute, async (req, res, next) => {
+  try {
+    if (!isTeamsChatConfigured()) {
+      return res.status(503).json({ error: 'Microsoft 365 Teams chat is not configured on the server' })
+    }
+
+    const recipientEmail = typeof req.user?.email === 'string' ? req.user.email.trim().toLowerCase() : ''
+    if (!recipientEmail) {
+      return res.status(400).json({ error: 'Your account has no email address' })
+    }
+
+    const teamsSender = (process.env.MS365_TEAMS_SENDER || process.env.MS365_SENDER || '').trim().toLowerCase()
+    if (teamsSender && teamsSender === recipientEmail) {
+      return res.status(400).json({
+        error:
+          `You are logged in as ${recipientEmail}, which is also MS365_TEAMS_SENDER. ` +
+          'Teams cannot send a 1:1 chat to the same account. Log in as a different user to test, or set MS365_TEAMS_SENDER to another licensed user in .env.',
+      })
+    }
+
+    const recipientName =
+      typeof req.user?.name === 'string' && req.user.name.trim()
+        ? req.user.name.trim()
+        : recipientEmail.split('@')[0]
+    const now = new Date().toLocaleString()
+    const message =
+      `Activity Tracker — test Teams notification\n` +
+      `Hi ${recipientName},\n\n` +
+      `This is a test message from your profile settings. If you see this in Teams, log alerts are set up correctly.\n\n` +
+      `Sent: ${now}`
+
+    await sendTeamsChatMessages({ recipientEmail, messages: [message] })
+    res.json({ success: true, to: recipientEmail })
   } catch (err) {
     next(err)
   }

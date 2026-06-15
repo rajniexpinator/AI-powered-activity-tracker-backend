@@ -180,5 +180,5 @@ async function sendMs365Draft({ messageId }) {
   }
 }
 
-export { isMsGraphConfigured, sendMs365Mail, createMs365Draft, sendMs365Draft }
+export { isMsGraphConfigured, getAppAccessToken, sendMs365Mail, createMs365Draft, sendMs365Draft }
 
