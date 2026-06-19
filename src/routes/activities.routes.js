@@ -20,6 +20,7 @@ import {
   groupActivitiesByCustomer,
 } from '../services/weeklyActivityExcel.js'
 import { buildSeverityAlertEmail } from '../services/teamsSeverityNotifications.js'
+import { resolveReportingPlant } from '../constants/plants.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
@@ -362,15 +363,25 @@ router.post('/', protectRoute, async (req, res, next) => {
 
     const location = pickLocationFromBody(req.body, structured)
 
+    const reportingPlant = resolveReportingPlant(req.user.assignedPlant, req.user.assignedPlantOther)
+    const structuredWithPlant = { ...structured }
+    if (reportingPlant) {
+      if (!structuredWithPlant.plant) structuredWithPlant.plant = reportingPlant
+      if (!structuredWithPlant.oem) structuredWithPlant.oem = reportingPlant
+    }
+
     const activityPayload = {
       userId: req.user._id,
       customer,
       summary,
       rawConversation: rawText,
-      structuredData: structured,
+      structuredData: structuredWithPlant,
     }
     if (location) {
       activityPayload.location = location
+    }
+    if (reportingPlant) {
+      activityPayload.reportingPlant = reportingPlant
     }
 
     if (Array.isArray(images)) {
@@ -421,7 +432,7 @@ router.get('/', protectRoute, async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1, location: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1, location: 1, reportingPlant: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -430,6 +441,7 @@ router.get('/', protectRoute, async (req, res, next) => {
       _id: a._id,
       customer: a.customer,
       location: a.location,
+      reportingPlant: a.reportingPlant,
       summary: a.summary,
       createdAt: a.createdAt,
       isOwner: String(a.userId) === String(uid),
@@ -493,7 +505,7 @@ router.get('/admin', protectRoute, async (req, res, next) => {
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1, location: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1, location: 1, reportingPlant: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])

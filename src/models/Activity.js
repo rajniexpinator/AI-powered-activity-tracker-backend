@@ -4,6 +4,8 @@ const activitySchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     customer: { type: String, trim: true },
+    /** Resolved reporting plant/OEM stamped from the employee profile at log creation. */
+    reportingPlant: { type: String, trim: true, default: undefined },
     // Up to 5-character physical-location tag (e.g. "A12", "B-7", "ZN102").
     // Helps a manager walk to the spot when they read a log.
     location: {
@@ -42,6 +44,7 @@ const activitySchema = new mongoose.Schema(
 
 activitySchema.index({ userId: 1, createdAt: -1 })
 activitySchema.index({ customer: 1 })
+activitySchema.index({ reportingPlant: 1 })
 activitySchema.index({ isArchived: 1 })
 activitySchema.index({ sharedWith: 1, isArchived: 1 })
 

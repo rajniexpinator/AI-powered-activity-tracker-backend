@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { User } from '../models/User.js'
 import { protectRoute, requireRole } from '../middleware/auth.js'
+import { normalizeAssignedPlantUpdate } from '../constants/plants.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
@@ -37,7 +38,21 @@ function toUserResponse(user) {
     role: user.role,
     isActive: user.isActive,
     emailNotifications: resolveEmailNotifications(user),
+    assignedPlant: user.assignedPlant || undefined,
+    assignedPlantOther: user.assignedPlantOther || undefined,
   }
+}
+
+function applyAssignedPlantUpdate(update, body, res) {
+  const plantUpdate = normalizeAssignedPlantUpdate(body)
+  if (!plantUpdate) return true
+  if (plantUpdate.error) {
+    res.status(400).json({ error: plantUpdate.error })
+    return false
+  }
+  update.assignedPlant = plantUpdate.assignedPlant
+  update.assignedPlantOther = plantUpdate.assignedPlantOther
+  return true
 }
 
 function normalizeSeverityLevels(value) {
@@ -138,7 +153,7 @@ router.get('/me', protectRoute, (req, res) => {
 // PATCH /api/auth/me — update current user profile (name, password)
 router.patch('/me', protectRoute, async (req, res, next) => {
   try {
-    const { name, currentPassword, newPassword, emailNotifications } = req.body || {}
+    const { name, currentPassword, newPassword, emailNotifications, assignedPlant, assignedPlantOther } = req.body || {}
     const update = {}
     if (typeof name === 'string') {
       update.name = name.trim() || undefined
@@ -161,6 +176,12 @@ router.patch('/me', protectRoute, async (req, res, next) => {
       if (Object.prototype.hasOwnProperty.call(emailNotifications, 'severityLevels')) {
         update['emailNotifications.severityLevels'] = normalizeSeverityLevels(emailNotifications.severityLevels)
       }
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlant') ||
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlantOther')
+    ) {
+      if (!applyAssignedPlantUpdate(update, { assignedPlant, assignedPlantOther }, res)) return
     }
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ error: 'Provide at least one field to update' })
@@ -213,7 +234,7 @@ router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next)
 // PATCH /api/auth/users/:id — update role or isActive (admin only)
 router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { role, isActive, name, email, resetPassword, emailNotifications } = req.body || {}
+    const { role, isActive, name, email, resetPassword, emailNotifications, assignedPlant, assignedPlantOther } = req.body || {}
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
     if (role && ['admin', 'employee'].includes(role)) update.role = role
@@ -226,6 +247,13 @@ router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, 
       if (Object.prototype.hasOwnProperty.call(emailNotifications, 'severityLevels')) {
         update['emailNotifications.severityLevels'] = normalizeSeverityLevels(emailNotifications.severityLevels)
       }
+    }
+
+    if (
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlant') ||
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlantOther')
+    ) {
+      if (!applyAssignedPlantUpdate(update, { assignedPlant, assignedPlantOther }, res)) return
     }
 
     if (resetPassword && typeof resetPassword === 'string') {

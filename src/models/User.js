@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { PLANT_OPTIONS } from '../constants/plants.js'
 
 const userSchema = new mongoose.Schema(
   {
@@ -21,6 +22,10 @@ const userSchema = new mongoose.Schema(
         default: [],
       },
     },
+    /** Single reporting plant/OEM per employee (KTP, LAP, OHAP, Oakville, or Other). */
+    assignedPlant: { type: String, enum: PLANT_OPTIONS, default: undefined },
+    /** Custom plant name when assignedPlant is Other (e.g. KCAP). */
+    assignedPlantOther: { type: String, trim: true, default: undefined },
   },
   { timestamps: true }
 )
