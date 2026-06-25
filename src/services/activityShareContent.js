@@ -1,0 +1,85 @@
+import { formatUsDateTime } from '../utils/formatDate.js'
+import { resolveSharePreferences } from '../constants/sharePreferences.js'
+
+function asText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function severityLabel(raw) {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? parseInt(raw, 10) : NaN
+  if (n === 0) return '0 — All good'
+  if (n === 1) return '1 — Low'
+  if (n === 2) return '2 — Medium'
+  if (n === 3) return '3 — High'
+  return ''
+}
+
+function isVideoAttachment(a) {
+  const mime = (a?.mime ?? '').toLowerCase()
+  if (mime.startsWith('video/')) return true
+  const path = `${a?.name ?? ''} ${a?.url ?? ''}`.toLowerCase()
+  return /\.(mp4|mov|webm|m4v|ogv|ogg)(\?|#|$)/.test(path)
+}
+
+/**
+ * Build plain-text body for sharing/emailing an activity log.
+ * @param {object} activity
+ * @param {object} [user] - for share preference resolution
+ * @param {{ photoLinkLines?: string[], attachedImageCount?: number }} [opts]
+ */
+export function buildActivityShareText(activity, user, opts = {}) {
+  const prefs = resolveSharePreferences(user).activityLog
+  const structured =
+    activity?.structuredData && typeof activity.structuredData === 'object' ? activity.structuredData : {}
+
+  const customer = asText(activity?.customer) || asText(structured.customer) || 'Unknown customer'
+  const summary = asText(activity?.summary) || asText(structured.summary) || 'No summary'
+  const partName = asText(structured.part_name) || asText(structured.partName)
+  const partNumber = asText(structured.part_number) || asText(structured.partNumber)
+  const rawText = asText(activity?.rawConversation)
+  const createdLabel = activity?.createdAt ? formatUsDateTime(activity.createdAt) : 'Unknown date'
+
+  const lines = ['Apex Quality — AI activity log', '']
+
+  if (prefs.customer) lines.push(`Customer: ${customer}`)
+  if (prefs.createdAt) lines.push(`Created: ${createdLabel}`)
+  if (prefs.summary) lines.push(`Summary: ${summary}`)
+  if (prefs.partName && partName) lines.push(`Part name: ${partName}`)
+  if (prefs.partNumber && partNumber) lines.push(`Part number: ${partNumber}`)
+
+  if (prefs.summary || rawText) {
+    lines.push('', 'Notes:', rawText || '(none)')
+  }
+
+  const photoLines = Array.isArray(opts.photoLinkLines) ? opts.photoLinkLines.filter(Boolean) : []
+  const attachedImageCount = opts.attachedImageCount ?? 0
+  if (prefs.photos && photoLines.length > 0) {
+    const header =
+      attachedImageCount > 0
+        ? 'Photos are attached above in this message. Tap a link below for full resolution:'
+        : 'Photos (tap a link to open full size):'
+    lines.push('', '—', header, ...photoLines)
+  }
+
+  const videos = Array.isArray(activity?.attachments)
+    ? activity.attachments.filter((a) => a && asText(a.url) && isVideoAttachment(a))
+    : []
+  if (prefs.files && videos.length > 0) {
+    lines.push('', '—', 'Videos (tap a link to open):')
+    for (const v of videos) {
+      const label = asText(v.name)
+      lines.push(label ? `${label}\n${v.url}` : v.url)
+    }
+  }
+
+  const datePart = activity?.createdAt
+    ? new Date(activity.createdAt).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10)
+
+  return {
+    title: `AI log - ${customer} - ${datePart}`,
+    text: lines.join('\n'),
+    includeImageAttachments: Boolean(prefs.photos),
+    includeFileAttachments: Boolean(prefs.files),
+  }
+}

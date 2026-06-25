@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken'
 import { User } from '../models/User.js'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { normalizeAssignedPlantUpdate } from '../constants/plants.js'
+import { normalizeSharePreferencesUpdate, resolveSharePreferences } from '../constants/sharePreferences.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
@@ -40,7 +41,19 @@ function toUserResponse(user) {
     emailNotifications: resolveEmailNotifications(user),
     assignedPlant: user.assignedPlant || undefined,
     assignedPlantOther: user.assignedPlantOther || undefined,
+    sharePreferences: resolveSharePreferences(user),
   }
+}
+
+function applySharePreferencesUpdate(update, body, res) {
+  const spUpdate = normalizeSharePreferencesUpdate(body)
+  if (!spUpdate) return true
+  if (spUpdate.error) {
+    res.status(400).json({ error: spUpdate.error })
+    return false
+  }
+  update.sharePreferences = spUpdate.sharePreferences
+  return true
 }
 
 function applyAssignedPlantUpdate(update, body, res) {
@@ -153,7 +166,7 @@ router.get('/me', protectRoute, (req, res) => {
 // PATCH /api/auth/me — update current user profile (name, password)
 router.patch('/me', protectRoute, async (req, res, next) => {
   try {
-    const { name, currentPassword, newPassword, emailNotifications, assignedPlant, assignedPlantOther } = req.body || {}
+    const { name, currentPassword, newPassword, emailNotifications, assignedPlant, assignedPlantOther, sharePreferences } = req.body || {}
     const update = {}
     if (typeof name === 'string') {
       update.name = name.trim() || undefined
@@ -182,6 +195,9 @@ router.patch('/me', protectRoute, async (req, res, next) => {
       Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlantOther')
     ) {
       if (!applyAssignedPlantUpdate(update, { assignedPlant, assignedPlantOther }, res)) return
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'sharePreferences')) {
+      if (!applySharePreferencesUpdate(update, { sharePreferences }, res)) return
     }
     if (Object.keys(update).length === 0) {
       return res.status(400).json({ error: 'Provide at least one field to update' })
@@ -234,7 +250,7 @@ router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next)
 // PATCH /api/auth/users/:id — update role or isActive (admin only)
 router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { role, isActive, name, email, resetPassword, emailNotifications, assignedPlant, assignedPlantOther } = req.body || {}
+    const { role, isActive, name, email, resetPassword, emailNotifications, assignedPlant, assignedPlantOther, sharePreferences } = req.body || {}
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
     if (role && ['admin', 'employee'].includes(role)) update.role = role
@@ -254,6 +270,9 @@ router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, 
       Object.prototype.hasOwnProperty.call(req.body || {}, 'assignedPlantOther')
     ) {
       if (!applyAssignedPlantUpdate(update, { assignedPlant, assignedPlantOther }, res)) return
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'sharePreferences')) {
+      if (!applySharePreferencesUpdate(update, { sharePreferences }, res)) return
     }
 
     if (resetPassword && typeof resetPassword === 'string') {

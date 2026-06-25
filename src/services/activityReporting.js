@@ -1,15 +1,23 @@
 import { createChatCompletion } from './openai.js'
 import { BarcodeMapping } from '../models/BarcodeMapping.js'
+import { enabledSectionPromptLines, normalizeReportSections } from '../constants/reportSections.js'
+import { formatUsDate } from '../utils/formatDate.js'
 
 /**
- * Generate a weekly quality report from a list of activities.
+ * Generate a quality report narrative from a list of activities.
  *
  * @param {Array<any>} activities - Activity documents (already filtered for the period)
- * @param {{ from?: string, to?: string, includeCustomerSummaries?: boolean }} [options]
+ * @param {{ from?: string, to?: string, includeCustomerSummaries?: boolean, reportSections?: object }} [options]
  * @returns {Promise<string>}
  */
 export async function generateWeeklyQualityReport(activities, options = {}) {
   const { from, to, includeCustomerSummaries } = options
+  const reportSections = normalizeReportSections(options.reportSections)
+  const sectionLines = enabledSectionPromptLines(reportSections)
+
+  if (sectionLines.length === 0) {
+    return 'No report sections were selected.'
+  }
 
   if (!activities || activities.length === 0) {
     return 'No quality activities were logged in the selected period.'
@@ -29,9 +37,9 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
 
   const periodLabel =
     from || to
-      ? `for the period ${from ? new Date(from).toLocaleDateString() : ''}${
-          from && to ? ' to ' : ''
-        }${to ? new Date(to).toLocaleDateString() : ''}`.trim()
+      ? `for the period ${from ? formatUsDate(from) : ''}${from && to ? ' to ' : ''}${
+          to ? formatUsDate(to) : ''
+        }`.trim()
       : 'for the recent period'
 
   const normalized = activities.slice(0, 250).map((a) => {
@@ -39,9 +47,6 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
     const structured = a.structuredData || {}
     const customer = a.customer || structured.customer || 'Unknown'
     const barcodes = extractBarcodes(a.rawConversation)
-    const rawSev = structured.severity
-    const sevNum = typeof rawSev === 'number' ? rawSev : typeof rawSev === 'string' ? parseInt(rawSev, 10) : NaN
-    const severity = sevNum === 0 || sevNum === 1 || sevNum === 2 || sevNum === 3 ? sevNum : null
     return {
       createdAt: a.createdAt,
       customer,
@@ -52,7 +57,6 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
       intent: structured.intent,
       outcome: structured.outcome,
       nextActions: Array.isArray(structured.next_actions) ? structured.next_actions : [],
-      severity,
       barcodes,
     }
   })
@@ -83,16 +87,11 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
 
   const buildEntryLines = (a) => {
     const parts = []
-    parts.push(`- When: ${new Date(a.createdAt).toISOString()}`)
+    parts.push(`- When: ${formatUsDate(a.createdAt)}`)
     parts.push(`  Employee: ${a.employeeName} (${a.employeeEmail})`)
     parts.push(`  Customer: ${a.customer}`)
     parts.push(`  Summary: ${a.summary}`)
     if (a.part) parts.push(`  Part: ${a.part}`)
-    if (a.severity != null) {
-      const label =
-        a.severity === 0 ? 'all good' : a.severity === 1 ? 'low' : a.severity === 2 ? 'medium' : a.severity === 3 ? 'high' : ''
-      parts.push(`  Issue severity: ${a.severity}${label ? ` (${label})` : ''}`)
-    }
     if (Array.isArray(a.barcodes) && a.barcodes.length > 0) {
       parts.push(`  Barcodes scanned: ${a.barcodes.slice(0, 6).join(', ')}`)
     }
@@ -128,19 +127,16 @@ export async function generateWeeklyQualityReport(activities, options = {}) {
 You are a senior quality engineer at Apex Quality Control.
 You receive a list of structured activity logs from automotive plants (mainly Ford) where Apex represents suppliers.
 
-Write a professional weekly quality report ${periodLabel} that can be sent directly to supplier engineering / plant management.
+Write a professional quality report ${periodLabel} that can be sent directly to supplier engineering / plant management.
 
 Formatting rules (very important):
 - Do NOT use markdown characters like *, **, ###, or ---.
-- Use normal headings with numbers, for example:
-  Weekly Quality Report – 09/03/2026 to 16/03/2026
-  1. Customers and Plants Visited
-  2. Summary of Visits and Issues
-  3. Key Actions Taken
-  4. Risks and Recommended Follow-Ups
-  5. Next Steps / Closing
+- Do NOT use the word "weekly" or "Weekly Quality Report" anywhere.
+- Use normal headings with numbers. Include ONLY these sections (skip any not listed):
+${sectionLines.join('\n')}
 - Use short paragraphs and simple hyphen bullets (e.g. "- Issue: ..."), with blank lines between sections.
 - Keep the tone concise, clear, and businesslike.
+- Do NOT mention issue severity, severity levels, or severity numbers anywhere in the report output.
 
 Only describe items that are supported by the logs. Do not invent new issues or customers.`.trim()
 
@@ -151,17 +147,16 @@ ${logsBlock}
 
 ${barcodeNotesBlock ? `\nBarcode mappings and notes referenced during this period:\n\n${barcodeNotesBlock}\n` : ''}
 
-Using ONLY the information above, write a clean weekly quality report in the following structure:
+Using ONLY the information above, write a clean quality report.
 
-- Title line with "Weekly Quality Report" and the period.
-- Section 1: Customers and Plants Visited (list main customers/plants and dates).
-- Section 2: Summary of Visits and Issues (grouped by customer when possible).
-- Section 3: Key Actions Taken.
-- Section 4: Risks and Recommended Follow-Ups.
-- Section 5: Next Steps / Closing sentence.
+- Start with a title line: "Quality Report for [Customer] at [OEM/plant]" when customer and plant are known, otherwise "Quality Report" with the period.
+- Include ONLY these numbered sections (omit any not listed):
+${sectionLines.join('\n')}
 
 Remember:
 - No markdown syntax.
+- Do NOT use the word "weekly".
+- Do NOT mention issue severity or severity levels.
 - Simple numbered headings and bullet points.
 - Short, readable paragraphs suitable for pasting into an email or Word document.`.trim()
 
@@ -178,7 +173,7 @@ Remember:
 
   const content = completion.choices?.[0]?.message?.content
   if (!content) {
-    throw new Error('OpenAI returned an empty response for weekly report')
+    throw new Error('OpenAI returned an empty response for quality report')
   }
 
   return content

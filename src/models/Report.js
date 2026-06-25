@@ -17,9 +17,23 @@ const reportSchema = new mongoose.Schema(
 
     includeCustomerSummaries: { type: Boolean, default: false },
 
+    reportSections: {
+      customersVisited: { type: Boolean, default: true },
+      visitSummary: { type: Boolean, default: true },
+      keyActions: { type: Boolean, default: true },
+      risks: { type: Boolean, default: true },
+      nextSteps: { type: Boolean, default: true },
+    },
+    includeReportPictures: { type: Boolean, default: true },
+
     /** Issue severity filter used when generating (structuredData.severity 0–3). */
     issueSeverityExact: { type: Number, min: 0, max: 3 },
     issueSeverityMin: { type: Number, min: 0, max: 3 },
+
+    /** OEM / reporting plant for this report (from activity logs). */
+    oem: { type: String, trim: true },
+    /** Cached display title, e.g. Quality Report for Piston at KTP */
+    title: { type: String, trim: true },
 
     // Output
     content: { type: String, required: true },
@@ -45,6 +59,7 @@ const reportSchema = new mongoose.Schema(
 reportSchema.index({ createdBy: 1, createdAt: -1 })
 reportSchema.index({ customer: 1, createdAt: -1 })
 reportSchema.index({ userId: 1, createdAt: -1 })
+reportSchema.index({ oem: 1, createdAt: -1 })
 
 export const Report = mongoose.model('Report', reportSchema)
 

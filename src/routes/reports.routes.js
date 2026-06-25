@@ -1,31 +1,23 @@
 import { Router } from 'express'
 import { protectRoute, requireRole } from '../middleware/auth.js'
-import { Activity } from '../models/Activity.js'
 import { Report } from '../models/Report.js'
-import { generateWeeklyQualityReport } from '../services/activityReporting.js'
-import { buildReportImageGallery } from '../services/reportImageGallery.js'
+import { buildQualityReportTitle, safeQualityReportFilename } from '../services/reportTitle.js'
 import { renderWeeklyReportPdf } from '../services/reportPdf.js'
 import { generateReportFromParams, inferDateMode } from '../services/reportGeneration.js'
+import { resolveSharePreferences } from '../constants/sharePreferences.js'
 
 const router = Router()
 
 function buildReportPdfTitle(report) {
-  const titleParts = ['Weekly quality report']
-  if (report?.from || report?.to) {
-    const fromLabel = report.from ? new Date(report.from).toLocaleDateString() : ''
-    const toLabel = report.to ? new Date(report.to).toLocaleDateString() : ''
-    const range = `${fromLabel}${fromLabel && toLabel ? ' to ' : ''}${toLabel}`.trim()
-    if (range) titleParts.push(range)
-  }
-  if (report?.customer) titleParts.push(String(report.customer))
-  return titleParts.join(' – ')
+  return buildQualityReportTitle({
+    customer: report?.customer,
+    oem: report?.oem,
+    title: report?.title,
+  })
 }
 
 function safePdfFilename(report) {
-  const customer = typeof report?.customer === 'string' && report.customer.trim() ? report.customer.trim() : 'report'
-  const safe = customer.replace(/[^\w.\-() ]+/g, '_').slice(0, 60) || 'report'
-  const date = report?.createdAt ? new Date(report.createdAt).toISOString().slice(0, 10) : 'export'
-  return `weekly-report-${safe}-${date}.pdf`
+  return safeQualityReportFilename(report)
 }
 
 function parseDateOrUndefined(value) {
@@ -125,76 +117,70 @@ function buildActivityFilter({ userId, customer, customers, period, from, to, ar
 router.post('/generate', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const body = req.body || {}
-    const { userId, customer, from, to, limit, includeCustomerSummaries, severity, minSeverity, period } = body
     const customers = parseCustomersInput(body)
-
-    const rawLimit = typeof limit === 'number' ? limit : NaN
+    const rawLimit = typeof body.limit === 'number' ? body.limit : NaN
     const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
 
-    const fromDate = parseDateOrUndefined(from)
-    const toDate = parseDateOrUndefined(to)
+    const fromDate = parseDateOrUndefined(body.from)
+    const toDate = parseDateOrUndefined(body.to)
     const useCustomDates = Boolean(fromDate || toDate)
 
-    const filter = buildActivityFilter({
-      userId,
-      customer,
-      customers,
-      period: !useCustomDates && typeof period === 'string' ? period : undefined,
+    const params = {
+      userId: typeof body.userId === 'string' && body.userId ? body.userId : undefined,
+      customer: customers.length === 1 ? customers[0] : typeof body.customer === 'string' ? body.customer : undefined,
+      customers: customers.length > 1 ? customers : undefined,
+      period: !useCustomDates && typeof body.period === 'string' ? body.period : undefined,
       from: fromDate,
       to: toDate,
-      archived: false,
-      severity: severity != null && severity !== '' ? String(severity) : undefined,
-      minSeverity: minSeverity != null && minSeverity !== '' ? String(minSeverity) : undefined,
-    })
+      severity: body.severity != null && body.severity !== '' ? String(body.severity) : undefined,
+      minSeverity: body.minSeverity != null && body.minSeverity !== '' ? String(body.minSeverity) : undefined,
+      oem: typeof body.oem === 'string' && body.oem.trim() ? body.oem.trim() : undefined,
+      includeCustomerSummaries: Boolean(body.includeCustomerSummaries),
+      reportSections: body.reportSections,
+      includeReportPictures: body.includeReportPictures !== false,
+      aiQuestion: typeof body.aiQuestion === 'string' ? body.aiQuestion : undefined,
+      dateMode: typeof body.dateMode === 'string' ? body.dateMode : undefined,
+    }
 
-    const activities = await Activity.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(max)
-      .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1, location: 1 })
-      .lean()
-
-    const report = await generateWeeklyQualityReport(activities, {
-      from,
-      to,
-      includeCustomerSummaries: Boolean(includeCustomerSummaries),
-    })
-
-    const imageGallery = buildReportImageGallery(activities)
+    const generated = await generateReportFromParams(params, { limit: max })
 
     let issueSeverityExact
     let issueSeverityMin
-    const sevRaw = severity != null && severity !== '' ? parseInt(String(severity).trim(), 10) : NaN
+    const sevRaw = body.severity != null && body.severity !== '' ? parseInt(String(body.severity).trim(), 10) : NaN
     if (!Number.isNaN(sevRaw) && sevRaw >= 0 && sevRaw <= 3) issueSeverityExact = sevRaw
-    const minSevRaw = minSeverity != null && minSeverity !== '' ? parseInt(String(minSeverity).trim(), 10) : NaN
+    const minSevRaw = body.minSeverity != null && body.minSeverity !== '' ? parseInt(String(body.minSeverity).trim(), 10) : NaN
     if (!Number.isNaN(minSevRaw) && minSevRaw >= 0 && minSevRaw <= 3) issueSeverityMin = minSevRaw
 
     const dateMode = inferDateMode({
-      period: !useCustomDates && typeof period === 'string' ? period : undefined,
-      aiQuestion: typeof body.aiQuestion === 'string' ? body.aiQuestion : undefined,
-      dateMode: typeof body.dateMode === 'string' ? body.dateMode : undefined,
+      period: params.period,
+      aiQuestion: params.aiQuestion,
+      dateMode: params.dateMode,
     })
 
     const saved = await Report.create({
       createdBy: req.user._id,
       scopeRole: req.user.role,
-      userId: typeof userId === 'string' && userId ? userId : undefined,
-      customer: typeof customer === 'string' && customer.trim() ? customer.trim() : undefined,
+      userId: params.userId,
+      customer: params.customer,
       from: fromDate,
       to: toDate,
-      period: !useCustomDates && typeof period === 'string' ? period.trim() : undefined,
+      period: params.period?.trim?.() || params.period,
       dateMode,
-      aiQuestion: typeof body.aiQuestion === 'string' && body.aiQuestion.trim() ? body.aiQuestion.trim() : undefined,
-      includeCustomerSummaries: Boolean(includeCustomerSummaries),
+      aiQuestion: params.aiQuestion?.trim?.() || undefined,
+      includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
+      reportSections: generated.reportSections,
+      includeReportPictures: generated.includeReportPictures,
       issueSeverityExact,
       issueSeverityMin,
-      content: report,
+      oem: generated.oem,
+      title: generated.title,
+      content: generated.content,
       model: 'gpt-4o-mini',
-      activityCount: activities.length,
-      imageGallery: imageGallery.length ? imageGallery : undefined,
+      activityCount: generated.activityCount,
+      imageGallery: generated.imageGallery?.length ? generated.imageGallery : undefined,
     })
 
-    res.json({ report, reportId: saved._id, imageGallery })
+    res.json({ report: generated.content, reportId: saved._id, imageGallery: generated.imageGallery })
   } catch (err) {
     next(err)
   }
@@ -212,6 +198,9 @@ router.get('/', protectRoute, requireRole('admin'), async (req, res, next) => {
     const skip = (page - 1) * limit
 
     const filter = { createdBy: req.user._id }
+    if (typeof req.query.oem === 'string' && req.query.oem.trim()) {
+      filter.oem = req.query.oem.trim()
+    }
 
     const [reports, total] = await Promise.all([
       Report.find(filter)
@@ -252,6 +241,12 @@ router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, r
         body.includeCustomerSummaries !== undefined
           ? body.includeCustomerSummaries
           : existing.includeCustomerSummaries,
+      reportSections: body.reportSections !== undefined ? body.reportSections : existing.reportSections,
+      includeReportPictures:
+        body.includeReportPictures !== undefined
+          ? body.includeReportPictures
+          : existing.includeReportPictures,
+      oem: body.oem !== undefined ? body.oem : existing.oem,
       severity:
         body.severity !== undefined
           ? body.severity
@@ -294,10 +289,14 @@ router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, r
     })
     existing.aiQuestion = typeof params.aiQuestion === 'string' && params.aiQuestion.trim() ? params.aiQuestion.trim() : undefined
     existing.includeCustomerSummaries = Boolean(params.includeCustomerSummaries)
+    existing.reportSections = generated.reportSections
+    existing.includeReportPictures = generated.includeReportPictures
     existing.issueSeverityExact = issueSeverityExact
     existing.issueSeverityMin = issueSeverityMin
     existing.content = generated.content
     existing.activityCount = generated.activityCount
+    existing.oem = generated.oem
+    existing.title = generated.title
     existing.imageGallery = generated.imageGallery?.length ? generated.imageGallery : undefined
     await existing.save()
 
@@ -321,10 +320,15 @@ router.get('/:id/pdf', protectRoute, requireRole('admin'), async (req, res, next
     }
 
     const title = buildReportPdfTitle(report)
+    const prefs = resolveSharePreferences(req.user)
+    const includePictures =
+      report.includeReportPictures !== false &&
+      prefs.report.includePictures &&
+      Array.isArray(report.imageGallery)
     const pdf = await renderWeeklyReportPdf({
       title,
       content: report.content,
-      imageGallery: Array.isArray(report.imageGallery) ? report.imageGallery : [],
+      imageGallery: includePictures ? report.imageGallery : [],
     })
 
     const filename = safePdfFilename(report)

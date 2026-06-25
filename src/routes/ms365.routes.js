@@ -8,6 +8,8 @@ import { isTeamsChatConfigured, sendTeamsChatMessages, diagnoseTeamsSetup } from
 import { createChatCompletion, getAssistantContent } from '../services/openai.js'
 import { Report } from '../models/Report.js'
 import { renderWeeklyReportPdf } from '../services/reportPdf.js'
+import { buildQualityReportTitle, safeQualityReportFilename } from '../services/reportTitle.js'
+import { resolveSharePreferences } from '../constants/sharePreferences.js'
 
 const router = Router()
 
@@ -90,12 +92,18 @@ router.post('/drafts/weekly-report', protectRoute, requireRole('admin'), async (
     const safeSubject =
       typeof subject === 'string' && subject.trim()
         ? subject.trim()
-        : 'Weekly quality report'
+        : buildQualityReportTitle({ customer: report.customer, oem: report.oem, title: report.title })
+
+    const prefs = resolveSharePreferences(req.user)
+    const includePictures = prefs.report.includePictures
+    const includeContent = prefs.report.includeContent
 
     const safeBodyText =
       typeof bodyText === 'string' && bodyText.trim()
         ? bodyText.trim()
-        : 'Please see attached report. Let us know if you have any questions.'
+        : includeContent && typeof report.content === 'string' && report.content.trim()
+          ? report.content.trim()
+          : 'Please see attached quality report. Let us know if you have any questions.'
 
     const draft = await createMs365Draft({
       to: toList,
@@ -103,24 +111,21 @@ router.post('/drafts/weekly-report', protectRoute, requireRole('admin'), async (
       subject: safeSubject,
       text: safeBodyText,
       attachments: await (async () => {
-        const titleParts = ['Weekly quality report']
-        if (report.from || report.to) {
-          const fromLabel = report.from ? new Date(report.from).toLocaleDateString() : ''
-          const toLabel = report.to ? new Date(report.to).toLocaleDateString() : ''
-          const range = `${fromLabel}${fromLabel && toLabel ? ' to ' : ''}${toLabel}`.trim()
-          if (range) titleParts.push(range)
-        }
-        if (report.customer) titleParts.push(String(report.customer))
-        const title = titleParts.join(' – ')
+        const title = buildQualityReportTitle({
+          customer: report.customer,
+          oem: report.oem,
+          title: report.title,
+        })
 
         const pdf = await renderWeeklyReportPdf({
           title,
           content: report.content,
-          imageGallery: Array.isArray(report.imageGallery) ? report.imageGallery : [],
+          imageGallery:
+            includePictures && Array.isArray(report.imageGallery) ? report.imageGallery : [],
         })
         return [
           {
-            name: 'weekly-report.pdf',
+            name: safeQualityReportFilename(report),
             contentType: 'application/pdf',
             contentBytesBase64: pdf.toString('base64'),
           },
@@ -172,7 +177,7 @@ router.post('/drafts/customer-email', protectRoute, requireRole('admin'), async 
 
     const system = `
 You are a quality engineer writing a short, professional email to a customer.
-The email will go out with a weekly quality report attached (PDF or text).
+The email will go out with a quality report attached (PDF or text).
 Keep it concise (3–6 sentences), polite, and businesslike.
 Do NOT invent details that aren't provided; keep wording generic.`.trim()
 
@@ -183,7 +188,7 @@ Context about the report:
 ${contextText}
 
 The email should:
-- Mention the attached weekly report explicitly.
+- Mention the attached quality report explicitly.
 - Include the week ending in the text if provided.
 - Offer to answer questions or discuss any items.
 - Use a neutral closing (e.g. "Best regards").
@@ -205,8 +210,9 @@ Write only the body text (no subject line, no "To:" line).`.trim()
 
     const subject =
       typeof weekEnding === 'string' && weekEnding.trim()
-        ? `Weekly quality report – week ending ${weekEnding.trim()}`
-        : 'Weekly quality report'
+        ? buildQualityReportTitle({ customer: customerName, oem: undefined }) +
+          ` – ${weekEnding.trim()}`
+        : buildQualityReportTitle({ customer: customerName })
 
     const draft = await createMs365Draft({
       to: toList,

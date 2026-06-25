@@ -21,6 +21,8 @@ import {
 } from '../services/weeklyActivityExcel.js'
 import { buildSeverityAlertEmail } from '../services/teamsSeverityNotifications.js'
 import { resolveReportingPlant } from '../constants/plants.js'
+import { buildActivityShareText } from '../services/activityShareContent.js'
+import { buildQualityReportTitle, deriveReportOem } from '../services/reportTitle.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
@@ -95,6 +97,11 @@ function parseCustomersQuery(query) {
     names.add(query.customer.trim())
   }
   return [...names]
+}
+
+function applyOemFilter(filter, query) {
+  const oem = typeof query?.oem === 'string' ? query.oem.trim() : ''
+  if (oem) filter.reportingPlant = oem
 }
 
 function applyCustomerFilter(filter, query) {
@@ -496,6 +503,7 @@ router.get('/admin', protectRoute, async (req, res, next) => {
     }
 
     applyCustomerFilter(filter, req.query)
+    applyOemFilter(filter, req.query)
     applyStructuredSeverityFilter(filter, req.query)
     applyCreatedAtFilter(filter, req.query)
 
@@ -1162,6 +1170,7 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
         structuredData: 1,
         images: 1,
         location: 1,
+        reportingPlant: 1,
       })
       .lean()
 
@@ -1172,6 +1181,12 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
     })
 
     const imageGallery = buildReportImageGallery(activities)
+    const reportCustomer =
+      typeof plan.customerSubstring === 'string' && plan.customerSubstring.trim()
+        ? plan.customerSubstring.trim()
+        : undefined
+    const oem = deriveReportOem(activities)
+    const title = buildQualityReportTitle({ customer: reportCustomer, oem })
 
     const aiQuestion = question.trim()
     const dateMode = inferDateMode({ aiQuestion })
@@ -1186,6 +1201,8 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       dateMode,
       aiQuestion,
       includeCustomerSummaries: false,
+      oem,
+      title,
       content: report,
       model: 'gpt-4o-mini',
       activityCount: activities.length,
@@ -1291,25 +1308,28 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
         })
     }
 
-    const createdLabel = activity.createdAt ? new Date(activity.createdAt).toLocaleString() : 'Unknown date'
     const safeCustomer = typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Unknown customer'
-    const safeLocation = typeof activity.location === 'string' && activity.location.trim() ? activity.location.trim() : ''
-    const safeSummary = typeof activity.summary === 'string' && activity.summary.trim() ? activity.summary.trim() : 'No summary'
-    const rawText =
-      typeof activity.rawConversation === 'string' && activity.rawConversation.trim()
-        ? activity.rawConversation.trim()
-        : ''
 
     const images = Array.isArray(activity.images) ? activity.images.filter((u) => typeof u === 'string' && u.trim()) : []
     const files = Array.isArray(activity.attachments) ? activity.attachments : []
+
+    const shareBuilt = buildActivityShareText(activity, req.user, {
+      photoLinkLines: images,
+      attachedImageCount: 0,
+    })
+
     const allSources = [
-      ...images.map((url, idx) => ({ url, fallbackName: `activity-image-${idx + 1}.jpg` })),
-      ...files.map((a, idx) => ({
-        url: a?.url,
-        fallbackName: `activity-file-${idx + 1}`,
-        preferredName: a?.name,
-        preferredMime: a?.mime,
-      })),
+      ...(shareBuilt.includeImageAttachments
+        ? images.map((url, idx) => ({ url, fallbackName: `activity-image-${idx + 1}.jpg` }))
+        : []),
+      ...(shareBuilt.includeFileAttachments
+        ? files.map((a, idx) => ({
+            url: a?.url,
+            fallbackName: `activity-file-${idx + 1}`,
+            preferredName: a?.name,
+            preferredMime: a?.mime,
+          }))
+        : []),
     ].filter((x) => typeof x.url === 'string' && x.url.trim())
 
     const preparedAttachments = []
@@ -1337,16 +1357,8 @@ router.post('/:id/send-email', protectRoute, async (req, res, next) => {
         : ''
 
     const textBody = [
-      `Activity log export`,
-      ``,
-      `Customer: ${safeCustomer}`,
-      ...(safeLocation ? [`Location: ${safeLocation}`] : []),
-      `Created: ${createdLabel}`,
-      `Summary: ${safeSummary}`,
-      ``,
-      `Raw notes:`,
-      rawText || '(none)',
-      ``,
+      shareBuilt.text,
+      '',
       `Attached in this email: ${preparedAttachments.length}`,
       `Source links captured in log: ${allSources.length}`,
       skippedText,

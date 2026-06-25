@@ -26,6 +26,21 @@ const userSchema = new mongoose.Schema(
     assignedPlant: { type: String, enum: PLANT_OPTIONS, default: undefined },
     /** Custom plant name when assignedPlant is Other (e.g. KCAP). */
     assignedPlantOther: { type: String, trim: true, default: undefined },
+    sharePreferences: {
+      activityLog: {
+        customer: { type: Boolean, default: true },
+        createdAt: { type: Boolean, default: true },
+        partName: { type: Boolean, default: true },
+        partNumber: { type: Boolean, default: true },
+        summary: { type: Boolean, default: true },
+        photos: { type: Boolean, default: true },
+        files: { type: Boolean, default: true },
+      },
+      report: {
+        includeContent: { type: Boolean, default: true },
+        includePictures: { type: Boolean, default: true },
+      },
+    },
   },
   { timestamps: true }
 )

@@ -28,7 +28,7 @@ export async function renderWeeklyReportPdf({ title, content, imageGallery }) {
     size: 'A4',
     margin: 48,
     info: {
-      Title: title || 'Weekly quality report',
+      Title: title || 'Quality Report',
     },
   })
 
@@ -40,7 +40,7 @@ export async function renderWeeklyReportPdf({ title, content, imageGallery }) {
     doc.on('error', reject)
   })
 
-  const safeTitle = title || 'Weekly quality report'
+  const safeTitle = title || 'Quality Report'
   doc.font('Helvetica-Bold').fontSize(16).fillColor('#111111').text(safeTitle)
   doc.moveDown(0.8)
   doc.font('Helvetica').fontSize(11).fillColor('#111111')

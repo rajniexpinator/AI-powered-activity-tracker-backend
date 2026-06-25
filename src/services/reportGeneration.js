@@ -3,6 +3,25 @@ import { Customer } from '../models/Customer.js'
 import { generateWeeklyQualityReport } from './activityReporting.js'
 import { buildReportImageGallery } from './reportImageGallery.js'
 import { interpretActivityQuestion, buildActivityFilterFromPlan } from './activityAiQuery.js'
+import { buildQualityReportTitle, deriveReportOem } from './reportTitle.js'
+import { normalizeReportSections } from '../constants/reportSections.js'
+
+function applyOemFilter(filter, oem) {
+  if (typeof oem === 'string' && oem.trim()) {
+    filter.reportingPlant = oem.trim()
+  }
+}
+
+function applyCustomerFilterFromParams(filter, params) {
+  const names = Array.isArray(params.customers)
+    ? params.customers.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim())
+    : []
+  if (names.length === 0 && typeof params.customer === 'string' && params.customer.trim()) {
+    names.push(params.customer.trim())
+  }
+  if (names.length === 1) filter.customer = names[0]
+  else if (names.length > 1) filter.customer = { $in: names }
+}
 
 function parseDateOrUndefined(value) {
   if (value == null || value === '') return undefined
@@ -75,8 +94,6 @@ function applyStructuredSeverityFilter(filter, { severity, minSeverity }) {
 
 export function buildActivityFilterFromReportParams(params) {
   const {
-    userId,
-    customer,
     period,
     from,
     to,
@@ -84,11 +101,13 @@ export function buildActivityFilterFromReportParams(params) {
     severity,
     minSeverity,
     dateMode,
+    userId,
   } = params
 
   const filter = { isArchived: Boolean(archived) }
   if (typeof userId === 'string' && userId) filter.userId = userId
-  if (typeof customer === 'string' && customer.trim()) filter.customer = customer.trim()
+  applyCustomerFilterFromParams(filter, params)
+  applyOemFilter(filter, params.oem)
 
   const mode = inferDateMode({ period, dateMode, aiQuestion: params.aiQuestion })
   if (mode === 'today') {
@@ -119,11 +138,30 @@ export function buildActivityFilterFromReportParams(params) {
 export async function generateReportFromParams(params, opts = {}) {
   const rawLimit = typeof opts.limit === 'number' ? opts.limit : NaN
   const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
+  const reportSections = normalizeReportSections(params.reportSections)
+  const includeReportPictures = params.includeReportPictures !== false
 
   let activities
   let fromLabel = params.from
   let toLabel = params.to
   let customerLabel = params.customer
+  if (!customerLabel && Array.isArray(params.customers) && params.customers.length === 1) {
+    customerLabel = params.customers[0]
+  }
+
+  const reportOpts = {
+    from: fromLabel,
+    to: toLabel,
+    includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
+    reportSections,
+  }
+
+  const finish = (activitiesList) => {
+    const oem =
+      typeof params.oem === 'string' && params.oem.trim() ? params.oem.trim() : deriveReportOem(activitiesList)
+    const title = buildQualityReportTitle({ customer: customerLabel, oem })
+    return { oem, title, activitiesList }
+  }
 
   if (typeof params.aiQuestion === 'string' && params.aiQuestion.trim()) {
     const custRows = await Customer.find().select('name').lean().limit(200)
@@ -141,6 +179,7 @@ export async function generateReportFromParams(params, opts = {}) {
       filter.customer = params.customer.trim()
       customerLabel = params.customer.trim()
     }
+    applyOemFilter(filter, params.oem)
     applyStructuredSeverityFilter(filter, {
       severity: params.severity ?? params.issueSeverityExact,
       minSeverity: params.minSeverity ?? params.issueSeverityMin,
@@ -163,15 +202,13 @@ export async function generateReportFromParams(params, opts = {}) {
         structuredData: 1,
         images: 1,
         location: 1,
+        reportingPlant: 1,
       })
       .lean()
 
-    const report = await generateWeeklyQualityReport(activities, {
-      from: fromLabel,
-      to: toLabel,
-      includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
-    })
-    const imageGallery = buildReportImageGallery(activities)
+    const report = await generateWeeklyQualityReport(activities, reportOpts)
+    const { oem, title } = finish(activities)
+    const imageGallery = includeReportPictures ? buildReportImageGallery(activities) : []
     return {
       content: report,
       imageGallery,
@@ -179,6 +216,10 @@ export async function generateReportFromParams(params, opts = {}) {
       customer: customerLabel,
       from: fromLabel,
       to: toLabel,
+      oem,
+      title,
+      reportSections,
+      includeReportPictures,
     }
   }
 
@@ -196,6 +237,7 @@ export async function generateReportFromParams(params, opts = {}) {
       userId: 1,
       images: 1,
       location: 1,
+      reportingPlant: 1,
     })
     .lean()
 
@@ -206,12 +248,9 @@ export async function generateReportFromParams(params, opts = {}) {
     toLabel = range.to
   }
 
-  const report = await generateWeeklyQualityReport(activities, {
-    from: fromLabel,
-    to: toLabel,
-    includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
-  })
-  const imageGallery = buildReportImageGallery(activities)
+  const report = await generateWeeklyQualityReport(activities, reportOpts)
+  const { oem, title } = finish(activities)
+  const imageGallery = includeReportPictures ? buildReportImageGallery(activities) : []
 
   return {
     content: report,
@@ -220,5 +259,9 @@ export async function generateReportFromParams(params, opts = {}) {
     customer: customerLabel,
     from: fromLabel,
     to: toLabel,
+    oem,
+    title,
+    reportSections,
+    includeReportPictures,
   }
 }
