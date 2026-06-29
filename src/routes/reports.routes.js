@@ -250,7 +250,11 @@ router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, r
           : existing.includeReportPictures,
       hideSeverity:
         body.hideSeverity !== undefined ? body.hideSeverity : existing.hideSeverity,
-      oem: body.oem !== undefined ? body.oem : existing.oem,
+      // NOTE: existing.oem is an auto-derived title label (from each log's
+      // structuredData.oem), not a saved plant filter. Re-applying it as a hard
+      // reportingPlant filter on re-run wrongly drops every log (0 logs), so only
+      // filter by OEM when the re-run request explicitly provides one.
+      oem: typeof body.oem === 'string' && body.oem.trim() ? body.oem.trim() : undefined,
       severity:
         body.severity !== undefined
           ? body.severity

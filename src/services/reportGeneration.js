@@ -6,6 +6,10 @@ import { interpretActivityQuestion, buildActivityFilterFromPlan } from './activi
 import { buildQualityReportTitle, deriveReportOem } from './reportTitle.js'
 import { normalizeReportSections } from '../constants/reportSections.js'
 
+function escapeRegex(s) {
+  return typeof s === 'string' ? s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : ''
+}
+
 function applyOemFilter(filter, oem) {
   if (typeof oem === 'string' && oem.trim()) {
     filter.reportingPlant = oem.trim()
@@ -216,8 +220,11 @@ export async function generateReportFromParams(params, opts = {}) {
       }
     }
     if (typeof params.customer === 'string' && params.customer.trim()) {
-      filter.customer = params.customer.trim()
-      customerLabel = params.customer.trim()
+      const c = params.customer.trim()
+      // Match the AI plan's flexible (case-insensitive substring) customer match,
+      // so re-running a saved AI report finds the same logs instead of 0.
+      filter.customer = new RegExp(escapeRegex(c), 'i')
+      customerLabel = c
     }
     applyOemFilter(filter, params.oem)
     applyStructuredSeverityFilter(filter, {
