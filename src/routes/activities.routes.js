@@ -23,6 +23,7 @@ import { buildSeverityAlertEmail } from '../services/teamsSeverityNotifications.
 import { resolveReportingPlant } from '../constants/plants.js'
 import { buildActivityShareText } from '../services/activityShareContent.js'
 import { buildQualityReportTitle, deriveReportOem } from '../services/reportTitle.js'
+import { normalizeReportSections } from '../constants/reportSections.js'
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
@@ -154,7 +155,12 @@ function applyCreatedAtFilter(filter, query) {
   }
   if (typeof query.to === 'string' && query.to) {
     const toDate = new Date(query.to)
-    if (!Number.isNaN(toDate.getTime())) createdAt.$lte = toDate
+    if (!Number.isNaN(toDate.getTime())) {
+      // Make the end date inclusive: a date-only value would otherwise stop at
+      // midnight and exclude everything logged on that day.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(query.to.trim())) toDate.setUTCHours(23, 59, 59, 999)
+      createdAt.$lte = toDate
+    }
   }
   if (Object.keys(createdAt).length > 0) filter.createdAt = createdAt
 }
@@ -1142,10 +1148,15 @@ router.post('/admin/ai-query', protectRoute, requireRole('admin'), async (req, r
 // Body: { question: string, limit?: number }
 router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
-    const { question, limit } = req.body || {}
+    const body = req.body || {}
+    const { question, limit } = body
     if (!question || typeof question !== 'string' || !question.trim()) {
       return res.status(400).json({ error: 'question is required' })
     }
+
+    const reportSections = normalizeReportSections(body.reportSections)
+    const includeReportPictures = body.includeReportPictures !== false
+    const hideSeverity = body.hideSeverity !== false
 
     const rawLimit = typeof limit === 'number' ? limit : NaN
     const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
@@ -1178,9 +1189,11 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       from: plan.from || undefined,
       to: plan.to || undefined,
       includeCustomerSummaries: false,
+      reportSections,
+      hideSeverity,
     })
 
-    const imageGallery = buildReportImageGallery(activities)
+    const imageGallery = includeReportPictures ? buildReportImageGallery(activities) : []
     const reportCustomer =
       typeof plan.customerSubstring === 'string' && plan.customerSubstring.trim()
         ? plan.customerSubstring.trim()
@@ -1201,6 +1214,9 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
       dateMode,
       aiQuestion,
       includeCustomerSummaries: false,
+      reportSections,
+      includeReportPictures,
+      hideSeverity,
       oem,
       title,
       content: report,

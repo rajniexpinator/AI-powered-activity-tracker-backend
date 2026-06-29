@@ -90,8 +90,14 @@ export function buildActivityFilterFromPlan(plan) {
       if (!Number.isNaN(d.getTime())) createdAt.$gte = d
     }
     if (plan.to) {
-      const d = new Date(String(plan.to))
-      if (!Number.isNaN(d.getTime())) createdAt.$lte = d
+      const s = String(plan.to).trim()
+      const d = new Date(s)
+      if (!Number.isNaN(d.getTime())) {
+        // A date-only value (e.g. "2026-06-22") parses to 00:00 UTC, which would
+        // exclude everything logged that day. Extend it to the end of the day.
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) d.setUTCHours(23, 59, 59, 999)
+        createdAt.$lte = d
+      }
     }
     if (Object.keys(createdAt).length > 0) {
       filter.createdAt = createdAt

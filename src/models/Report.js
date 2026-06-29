@@ -25,6 +25,8 @@ const reportSchema = new mongoose.Schema(
       nextSteps: { type: Boolean, default: true },
     },
     includeReportPictures: { type: Boolean, default: true },
+    /** When true, severity is kept out of the report narrative. */
+    hideSeverity: { type: Boolean, default: true },
 
     /** Issue severity filter used when generating (structuredData.severity 0–3). */
     issueSeverityExact: { type: Number, min: 0, max: 3 },

@@ -33,6 +33,25 @@ function parseDateOrUndefined(value) {
   return undefined
 }
 
+/**
+ * Parse a "to" date and make it inclusive: a date-only value (or one landing on
+ * exact midnight) is extended to the end of that day so logs from that day count.
+ */
+function parseToEndOfDay(value) {
+  const d = parseDateOrUndefined(value)
+  if (!d) return undefined
+  const out = new Date(d)
+  if (
+    out.getUTCHours() === 0 &&
+    out.getUTCMinutes() === 0 &&
+    out.getUTCSeconds() === 0 &&
+    out.getUTCMilliseconds() === 0
+  ) {
+    out.setUTCHours(23, 59, 59, 999)
+  }
+  return out
+}
+
 export function resolveTodayRange() {
   const start = new Date()
   start.setHours(0, 0, 0, 0)
@@ -116,7 +135,7 @@ export function buildActivityFilterFromReportParams(params) {
   } else {
     const periodRange = createdAtRangeFromPeriod(period)
     const fromDate = parseDateOrUndefined(from)
-    const toDate = parseDateOrUndefined(to)
+    const toDate = parseToEndOfDay(to)
     if (periodRange) {
       filter.createdAt = periodRange
     } else if (fromDate || toDate) {
@@ -140,6 +159,7 @@ export async function generateReportFromParams(params, opts = {}) {
   const max = Math.min(Math.max(Number.isNaN(rawLimit) ? 200 : rawLimit, 1), 500)
   const reportSections = normalizeReportSections(params.reportSections)
   const includeReportPictures = params.includeReportPictures !== false
+  const hideSeverity = params.hideSeverity !== false
 
   let activities
   let fromLabel = params.from
@@ -154,6 +174,7 @@ export async function generateReportFromParams(params, opts = {}) {
     to: toLabel,
     includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
     reportSections,
+    hideSeverity,
   }
 
   const finish = (activitiesList) => {
@@ -174,6 +195,25 @@ export async function generateReportFromParams(params, opts = {}) {
       filter.createdAt = { $gte: range.from, $lte: range.to }
       fromLabel = range.from
       toLabel = range.to
+    } else {
+      // Manual date filters from the change/re-run screen override the AI plan's dates.
+      const periodRange = createdAtRangeFromPeriod(params.period)
+      const manualFrom = parseDateOrUndefined(params.from)
+      const manualTo = parseToEndOfDay(params.to)
+      if (periodRange) {
+        filter.createdAt = periodRange
+        fromLabel = periodRange.$gte
+        toLabel = periodRange.$lte
+      } else if (manualFrom || manualTo) {
+        const createdAt = {}
+        if (manualFrom) createdAt.$gte = manualFrom
+        if (manualTo) createdAt.$lte = manualTo
+        if (Object.keys(createdAt).length > 0) {
+          filter.createdAt = createdAt
+          fromLabel = manualFrom ?? fromLabel
+          toLabel = manualTo ?? toLabel
+        }
+      }
     }
     if (typeof params.customer === 'string' && params.customer.trim()) {
       filter.customer = params.customer.trim()
@@ -220,6 +260,7 @@ export async function generateReportFromParams(params, opts = {}) {
       title,
       reportSections,
       includeReportPictures,
+      hideSeverity,
     }
   }
 
@@ -263,5 +304,6 @@ export async function generateReportFromParams(params, opts = {}) {
     title,
     reportSections,
     includeReportPictures,
+    hideSeverity,
   }
 }

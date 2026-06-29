@@ -138,6 +138,7 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       includeCustomerSummaries: Boolean(body.includeCustomerSummaries),
       reportSections: body.reportSections,
       includeReportPictures: body.includeReportPictures !== false,
+      hideSeverity: body.hideSeverity !== false,
       aiQuestion: typeof body.aiQuestion === 'string' ? body.aiQuestion : undefined,
       dateMode: typeof body.dateMode === 'string' ? body.dateMode : undefined,
     }
@@ -170,6 +171,7 @@ router.post('/generate', protectRoute, requireRole('admin'), async (req, res, ne
       includeCustomerSummaries: Boolean(params.includeCustomerSummaries),
       reportSections: generated.reportSections,
       includeReportPictures: generated.includeReportPictures,
+      hideSeverity: generated.hideSeverity,
       issueSeverityExact,
       issueSeverityMin,
       oem: generated.oem,
@@ -246,6 +248,8 @@ router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, r
         body.includeReportPictures !== undefined
           ? body.includeReportPictures
           : existing.includeReportPictures,
+      hideSeverity:
+        body.hideSeverity !== undefined ? body.hideSeverity : existing.hideSeverity,
       oem: body.oem !== undefined ? body.oem : existing.oem,
       severity:
         body.severity !== undefined
@@ -291,6 +295,7 @@ router.post('/:id/regenerate', protectRoute, requireRole('admin'), async (req, r
     existing.includeCustomerSummaries = Boolean(params.includeCustomerSummaries)
     existing.reportSections = generated.reportSections
     existing.includeReportPictures = generated.includeReportPictures
+    existing.hideSeverity = generated.hideSeverity
     existing.issueSeverityExact = issueSeverityExact
     existing.issueSeverityMin = issueSeverityMin
     existing.content = generated.content

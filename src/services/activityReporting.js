@@ -3,6 +3,70 @@ import { BarcodeMapping } from '../models/BarcodeMapping.js'
 import { enabledSectionPromptLines, normalizeReportSections } from '../constants/reportSections.js'
 import { formatUsDate } from '../utils/formatDate.js'
 
+/** Remove any line that mentions severity (used when hideSeverity is on). */
+function stripSeverityMentions(text) {
+  if (typeof text !== 'string' || !text) return text
+  return text
+    .split('\n')
+    .filter((line) => !/severity/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** Map a report heading line to one of the known section keys, or null if unknown. */
+function classifySectionHeading(headingText) {
+  const t = String(headingText || '').toLowerCase()
+  if (/customer/.test(t) && /(visit|plant)/.test(t)) return 'customersVisited'
+  if (/summary/.test(t)) return 'visitSummary'
+  if (/action/.test(t)) return 'keyActions'
+  if (/(risk|follow[\s-]*up|recommend)/.test(t)) return 'risks'
+  if (/(next step|closing)/.test(t)) return 'nextSteps'
+  return null
+}
+
+/**
+ * Hard safety net: remove any numbered section the user disabled, even if the AI
+ * included it anyway. Sections we can't confidently classify are left untouched.
+ * Kept sections are renumbered sequentially.
+ */
+function filterDisabledSections(text, reportSections) {
+  if (typeof text !== 'string' || !text) return text
+  const sections = normalizeReportSections(reportSections)
+  const lines = text.split('\n')
+  const headingRe = /^\s*(\d+)[.)]\s+\S/
+
+  const headingIdx = []
+  lines.forEach((line, i) => {
+    if (headingRe.test(line)) headingIdx.push(i)
+  })
+  if (headingIdx.length === 0) return text
+
+  const preamble = lines.slice(0, headingIdx[0])
+  const kept = []
+  for (let h = 0; h < headingIdx.length; h++) {
+    const start = headingIdx[h]
+    const end = h + 1 < headingIdx.length ? headingIdx[h + 1] : lines.length
+    const block = lines.slice(start, end)
+    const key = classifySectionHeading(block[0])
+    if (key && sections[key] === false) continue // user turned this section off
+    kept.push(block)
+  }
+
+  let counter = 0
+  const renumbered = kept.flatMap((block) => {
+    counter += 1
+    const [head, ...rest] = block
+    const newHead = head.replace(headingRe, (m) => m.replace(/\d+/, String(counter)))
+    return [newHead, ...rest]
+  })
+
+  return [...preamble, ...renumbered]
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /**
  * Generate a quality report narrative from a list of activities.
  *
@@ -12,6 +76,7 @@ import { formatUsDate } from '../utils/formatDate.js'
  */
 export async function generateWeeklyQualityReport(activities, options = {}) {
   const { from, to, includeCustomerSummaries } = options
+  const hideSeverity = options.hideSeverity !== false
   const reportSections = normalizeReportSections(options.reportSections)
   const sectionLines = enabledSectionPromptLines(reportSections)
 
@@ -136,7 +201,7 @@ Formatting rules (very important):
 ${sectionLines.join('\n')}
 - Use short paragraphs and simple hyphen bullets (e.g. "- Issue: ..."), with blank lines between sections.
 - Keep the tone concise, clear, and businesslike.
-- Do NOT mention issue severity, severity levels, or severity numbers anywhere in the report output.
+${hideSeverity ? '- Do NOT mention issue severity, severity levels, or severity numbers anywhere in the report output.' : ''}
 
 Only describe items that are supported by the logs. Do not invent new issues or customers.`.trim()
 
@@ -156,7 +221,7 @@ ${sectionLines.join('\n')}
 Remember:
 - No markdown syntax.
 - Do NOT use the word "weekly".
-- Do NOT mention issue severity or severity levels.
+${hideSeverity ? '- Do NOT mention issue severity or severity levels.' : ''}
 - Simple numbered headings and bullet points.
 - Short, readable paragraphs suitable for pasting into an email or Word document.`.trim()
 
@@ -176,6 +241,8 @@ Remember:
     throw new Error('OpenAI returned an empty response for quality report')
   }
 
-  return content
+  let finalText = filterDisabledSections(content, reportSections)
+  if (hideSeverity) finalText = stripSeverityMentions(finalText)
+  return finalText
 }
 
