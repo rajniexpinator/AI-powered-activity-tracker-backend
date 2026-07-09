@@ -5,6 +5,7 @@ import cors from 'cors'
 import helmet from 'helmet'
 
 import { connectDb } from './config/db.js'
+import { ensureSuperAdmin } from './bootstrap/ensureSuperAdmin.js'
 import { healthRouter, apiRouter } from './routes/index.js'
 import { errorHandler, notFound } from './middleware/errorHandler.js'
 
@@ -38,6 +39,7 @@ app.use(errorHandler)
 
 async function start() {
   await connectDb()
+  await ensureSuperAdmin()
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`)
   })

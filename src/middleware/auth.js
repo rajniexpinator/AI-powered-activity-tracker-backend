@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken'
 import { User } from '../models/User.js'
+import { roleHasPermission } from '../constants/roles.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
 
@@ -39,7 +40,8 @@ export function requireRole(...allowedRoles) {
     if (!req.user) {
       return res.status(401).json({ error: 'Not authorized' })
     }
-    if (!allowedRoles.includes(req.user.role)) {
+    const allowed = allowedRoles.some((role) => roleHasPermission(req.user.role, role))
+    if (!allowed) {
       return res.status(403).json({ error: 'Forbidden — insufficient role' })
     }
     next()

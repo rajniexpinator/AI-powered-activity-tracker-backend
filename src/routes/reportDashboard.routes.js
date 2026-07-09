@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { protectRoute as authProtect, requireRole as authRequireRole } from '../middleware/auth.js'
+import { isAdminRole } from '../constants/roles.js'
 import { Report } from '../models/Report.js'
 import { ReportDashboard } from '../models/ReportDashboard.js'
 import { generateReportFromParams, inferDateMode } from '../services/reportGeneration.js'
@@ -55,7 +56,7 @@ async function loadDashboardForUser(id, user, { employeeDatesOnly = false } = {}
       return { doc }
     }
 
-    if (user.role !== 'admin') {
+    if (!isAdminRole(user.role)) {
       return { error: { status: 403, message: 'Forbidden' } }
     }
     if (String(doc.createdBy) !== String(user._id)) {
@@ -72,7 +73,7 @@ function scopeForUser(user) {
 router.get('/', authProtect, async (req, res, next) => {
   try {
     const scope = scopeForUser(req.user)
-    if (scope === 'admin' && req.user.role !== 'admin') {
+    if (scope === 'admin' && !isAdminRole(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
     const filter = { createdBy: req.user._id }
@@ -255,7 +256,7 @@ router.post('/:id/duplicate', authProtect, async (req, res, next) => {
     if (loaded.error) return res.status(loaded.error.status).json({ error: loaded.error.message })
     const source = loaded.doc
 
-    if (source.scopeRole === 'admin' && req.user.role !== 'admin') {
+    if (source.scopeRole === 'admin' && !isAdminRole(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
 
@@ -293,7 +294,7 @@ router.delete('/:id', authProtect, async (req, res, next) => {
       if (String(doc.createdBy) !== String(req.user._id)) {
         return res.status(403).json({ error: 'Forbidden' })
       }
-    } else if (req.user.role !== 'admin') {
+    } else if (!isAdminRole(req.user.role)) {
       return res.status(403).json({ error: 'Forbidden' })
     }
 

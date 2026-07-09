@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import mongoose from 'mongoose'
 import { protectRoute, requireRole } from '../middleware/auth.js'
+import { isAdminRole } from '../constants/roles.js'
 import { Activity } from '../models/Activity.js'
 import { Customer } from '../models/Customer.js'
 import { User } from '../models/User.js'
@@ -76,7 +77,7 @@ function isCollaborator(activity, user) {
 
 function canViewActivity(activity, user) {
   if (!activity || !user) return false
-  if (activity.isArchived) return user.role === 'admin'
+  if (activity.isArchived) return isAdminRole(user.role)
   return true
 }
 
@@ -807,7 +808,7 @@ router.post('/:id/restore', protectRoute, async (req, res, next) => {
     }
 
     const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = isAdminRole(req.user.role)
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden — you cannot restore this activity' })
     }
@@ -838,7 +839,7 @@ router.post('/:id/archive', protectRoute, async (req, res, next) => {
     }
 
     const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = isAdminRole(req.user.role)
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden — you cannot archive this activity' })
@@ -871,7 +872,7 @@ router.patch('/:id/share', protectRoute, async (req, res, next) => {
     }
 
     const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = isAdminRole(req.user.role)
     if (!isOwner && !isAdmin) {
       return res.status(403).json({ error: 'Forbidden — only the log owner can update sharing' })
     }
@@ -986,7 +987,7 @@ router.delete('/:id', protectRoute, async (req, res, next) => {
     }
 
     const isOwner = refToId(activity.userId) === String(req.user._id)
-    const isPrivileged = ['admin'].includes(req.user.role)
+    const isPrivileged = isAdminRole(req.user.role)
 
     if (!isOwner && !isPrivileged) {
       return res.status(403).json({ error: 'Forbidden — you cannot delete this activity' })

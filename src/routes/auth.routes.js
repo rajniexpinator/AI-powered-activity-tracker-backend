@@ -5,6 +5,12 @@ import { User } from '../models/User.js'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { normalizeAssignedPlantUpdate } from '../constants/plants.js'
 import { normalizeSharePreferencesUpdate, resolveSharePreferences } from '../constants/sharePreferences.js'
+import {
+  canAdminManageUser,
+  canAssignRole,
+  isAdminRole,
+  isSuperAdmin,
+} from '../constants/roles.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
@@ -119,7 +125,7 @@ router.post('/register', async (req, res, next) => {
     const isFirstUser = (await User.countDocuments()) === 0
     let assignedRole = 'employee'
     if (isFirstUser) {
-      assignedRole = 'admin'
+      assignedRole = 'super_admin'
     } else {
       const authHeader = req.headers.authorization
       const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
@@ -133,11 +139,14 @@ router.post('/register', async (req, res, next) => {
         return res.status(401).json({ error: 'Invalid or expired token' })
       }
       const adminUser = await User.findById(decoded.userId)
-      if (!adminUser || adminUser.role !== 'admin') {
+      if (!adminUser || !isAdminRole(adminUser.role)) {
         return res.status(403).json({ error: 'Only admins can register new users' })
       }
-      const r = role && ['admin', 'employee'].includes(role) ? role : 'employee'
-      assignedRole = r
+      const requestedRole = role && ['super_admin', 'admin', 'employee'].includes(role) ? role : 'employee'
+      if (!canAssignRole(adminUser.role, requestedRole)) {
+        return res.status(403).json({ error: 'You cannot assign that role' })
+      }
+      assignedRole = requestedRole
     }
 
     const passwordHash = await bcrypt.hash(password, 10)
@@ -251,9 +260,22 @@ router.get('/users', protectRoute, requireRole('admin'), async (_req, res, next)
 router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const { role, isActive, name, email, resetPassword, emailNotifications, assignedPlant, assignedPlantOther, sharePreferences } = req.body || {}
+    const targetId = req.params.id
+    const targetUser = await User.findById(targetId)
+    if (!targetUser) return res.status(404).json({ error: 'User not found' })
+
+    if (!canAdminManageUser(req.user, targetUser)) {
+      return res.status(403).json({ error: 'Cannot modify a Super Admin account' })
+    }
+
     const update = {}
     if (typeof isActive === 'boolean') update.isActive = isActive
-    if (role && ['admin', 'employee'].includes(role)) update.role = role
+    if (role && ['super_admin', 'admin', 'employee'].includes(role)) {
+      if (!canAssignRole(req.user.role, role)) {
+        return res.status(403).json({ error: 'You cannot assign that role' })
+      }
+      update.role = role
+    }
     if (typeof name === 'string') update.name = name.trim() || undefined
     if (typeof email === 'string' && email.trim()) update.email = email.trim().toLowerCase()
     if (emailNotifications && typeof emailNotifications === 'object') {
@@ -285,7 +307,6 @@ router.patch('/users/:id', protectRoute, requireRole('admin'), async (req, res, 
       return res.status(400).json({ error: 'Provide at least one field to update' })
     }
 
-    const targetId = req.params.id
     const isSelf = String(targetId) === String(req.user._id)
     if (isSelf) {
       if (Object.prototype.hasOwnProperty.call(update, 'role') || Object.prototype.hasOwnProperty.call(update, 'isActive')) {
@@ -315,8 +336,15 @@ router.delete('/users/:id', protectRoute, requireRole('admin'), async (req, res,
     const user = await User.findById(targetId).lean()
     if (!user) return res.status(404).json({ error: 'User not found' })
 
-    if (user.role === 'admin') {
-      const adminCount = await User.countDocuments({ role: 'admin', isActive: true })
+    if (!canAdminManageUser(req.user, user)) {
+      return res.status(403).json({ error: 'Cannot delete a Super Admin account' })
+    }
+
+    if (isAdminRole(user.role)) {
+      const adminCount = await User.countDocuments({
+        role: { $in: ['admin', 'super_admin'] },
+        isActive: true,
+      })
       if (adminCount <= 1) {
         return res.status(400).json({ error: 'Cannot delete the last active admin' })
       }

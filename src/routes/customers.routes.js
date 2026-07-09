@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { protectRoute, requireRole } from '../middleware/auth.js'
+import { isAdminRole } from '../constants/roles.js'
 import { Customer } from '../models/Customer.js'
 
 const router = Router()
@@ -51,7 +52,7 @@ router.post('/', protectRoute, requireRole('admin'), async (req, res, next) => {
 
 router.get('/', protectRoute, async (req, res, next) => {
   try {
-    const isInternalRole = req.user.role === 'admin'
+    const isInternalRole = isAdminRole(req.user.role)
     const query = Customer.find({})
       .sort({ name: 1 })
 
