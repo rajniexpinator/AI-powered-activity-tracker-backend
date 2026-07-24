@@ -21,11 +21,15 @@ function isVideoAttachment(a) {
   return /\.(mp4|mov|webm|m4v|ogv|ogg)(\?|#|$)/.test(path)
 }
 
+function asAttachmentUrl(a) {
+  return a && typeof a.url === 'string' ? a.url.trim() : ''
+}
+
 /**
  * Build plain-text body for sharing/emailing an activity log.
  * @param {object} activity
  * @param {object} [user] - for share preference resolution
- * @param {{ photoLinkLines?: string[], attachedImageCount?: number }} [opts]
+ * @param {{ photoLinkLines?: string[], attachedImageCount?: number, attachedFileCount?: number }} [opts]
  */
 export function buildActivityShareText(activity, user, opts = {}) {
   const prefs = resolveSharePreferences(user).activityLog
@@ -61,14 +65,30 @@ export function buildActivityShareText(activity, user, opts = {}) {
     lines.push('', '—', header, ...photoLines)
   }
 
-  const videos = Array.isArray(activity?.attachments)
-    ? activity.attachments.filter((a) => a && asText(a.url) && isVideoAttachment(a))
-    : []
+  const attachments = Array.isArray(activity?.attachments) ? activity.attachments : []
+  const docs = attachments.filter((a) => asAttachmentUrl(a) && !isVideoAttachment(a))
+  const videos = attachments.filter((a) => asAttachmentUrl(a) && isVideoAttachment(a))
+  const attachedFileCount = opts.attachedFileCount ?? 0
+
+  if (prefs.files && docs.length > 0) {
+    const header =
+      attachedFileCount > 0
+        ? 'Files are attached above in this message. Tap a link below if a file is missing:'
+        : 'Files (tap a link to open):'
+    lines.push('', '—', header)
+    for (const f of docs) {
+      const label = asText(f.name)
+      const url = asAttachmentUrl(f)
+      lines.push(label ? `${label}\n${url}` : url)
+    }
+  }
+
   if (prefs.files && videos.length > 0) {
     lines.push('', '—', 'Videos (tap a link to open):')
     for (const v of videos) {
       const label = asText(v.name)
-      lines.push(label ? `${label}\n${v.url}` : v.url)
+      const url = asAttachmentUrl(v)
+      lines.push(label ? `${label}\n${url}` : url)
     }
   }
 
