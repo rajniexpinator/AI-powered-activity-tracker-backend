@@ -6,13 +6,11 @@ const activitySchema = new mongoose.Schema(
     customer: { type: String, trim: true },
     /** Resolved reporting plant/OEM stamped from the employee profile at log creation. */
     reportingPlant: { type: String, trim: true, default: undefined },
-    // Up to 5-character physical-location tag (e.g. "A12", "B-7", "ZN102").
-    // Helps a manager walk to the spot when they read a log.
-    location: {
+    /** Part / unit serial number from scan mapping or manual entry (replaces unused location). */
+    serialNumber: {
       type: String,
       trim: true,
-      uppercase: true,
-      maxlength: 5,
+      maxlength: 128,
       default: undefined,
     },
     summary: { type: String },
@@ -47,5 +45,6 @@ activitySchema.index({ customer: 1 })
 activitySchema.index({ reportingPlant: 1 })
 activitySchema.index({ isArchived: 1 })
 activitySchema.index({ sharedWith: 1, isArchived: 1 })
+activitySchema.index({ serialNumber: 1 })
 
 export const Activity = mongoose.model('Activity', activitySchema)

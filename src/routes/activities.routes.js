@@ -25,38 +25,52 @@ import { resolveReportingPlant } from '../constants/plants.js'
 import { buildActivityShareText } from '../services/activityShareContent.js'
 import { buildQualityReportTitle, deriveReportOem } from '../services/reportTitle.js'
 import { normalizeReportSections } from '../constants/reportSections.js'
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 const router = Router()
 const MAX_IMAGES_PER_ENTRY = 8
 const MAX_ATTACHMENTS_PER_ENTRY = 10
 const MAX_MS365_ATTACHMENT_BYTES = 3 * 1024 * 1024
-const MAX_SHARE_MEDIA_BYTES = 12 * 1024 * 1024
+// Match attachment upload cap (50 MB). Large report PDFs/ZIPs need this for native share.
+const MAX_SHARE_MEDIA_BYTES = 50 * 1024 * 1024
 const MAX_SHARED_USERS = 30
 const MAX_COLLAB_NOTES = 200
-const MAX_LOCATION_LENGTH = 5
+const MAX_SERIAL_NUMBER_LENGTH = 128
 
 /**
- * Normalize a Location tag the same way for both create and update flows.
- * Accepts up to 5 chars, uppercases, strips anything that isn't a letter,
- * digit or dash. Returns '' if there's nothing usable so we can clear it.
+ * Normalize a serial number for create/update.
+ * Allows a longer value than the old 5-char location tag.
  */
-function normalizeLocationValue(raw) {
+function normalizeSerialNumberValue(raw) {
   if (raw == null) return undefined
   if (typeof raw !== 'string') return undefined
-  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, MAX_LOCATION_LENGTH)
-  return cleaned
+  const cleaned = raw.trim().slice(0, MAX_SERIAL_NUMBER_LENGTH)
+  return cleaned || undefined
 }
 
 /**
- * Pick a Location from either the request body root or structured.location
- * (since the AI extraction may have inferred it). Top-level wins.
+ * Pick serial number from body root or structured fields.
+ * Top-level wins. Accepts serialNumber / serial_number (and legacy location as fallback).
  */
-function pickLocationFromBody(body, structured) {
-  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'location')) {
-    return normalizeLocationValue(body.location)
+function pickSerialNumberFromBody(body, structured) {
+  if (body && typeof body === 'object') {
+    if (Object.prototype.hasOwnProperty.call(body, 'serialNumber')) {
+      return normalizeSerialNumberValue(body.serialNumber)
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'serial_number')) {
+      return normalizeSerialNumberValue(body.serial_number)
+    }
   }
-  if (structured && typeof structured === 'object' && structured.location != null) {
-    return normalizeLocationValue(structured.location)
+  if (structured && typeof structured === 'object') {
+    if (structured.serialNumber != null) return normalizeSerialNumberValue(structured.serialNumber)
+    if (structured.serial_number != null) return normalizeSerialNumberValue(structured.serial_number)
+    // Legacy: old clients/AI may still send location — treat as serial until frontend migrates.
+    if (structured.location != null) return normalizeSerialNumberValue(structured.location)
+  }
+  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'location')) {
+    return normalizeSerialNumberValue(body.location)
   }
   return undefined
 }
@@ -375,13 +389,17 @@ router.post('/', protectRoute, async (req, res, next) => {
         ? structured.customer.trim()
         : undefined
 
-    const location = pickLocationFromBody(req.body, structured)
+    const serialNumber = pickSerialNumberFromBody(req.body, structured)
 
     const reportingPlant = resolveReportingPlant(req.user.assignedPlant, req.user.assignedPlantOther)
     const structuredWithPlant = { ...structured }
     if (reportingPlant) {
       if (!structuredWithPlant.plant) structuredWithPlant.plant = reportingPlant
       if (!structuredWithPlant.oem) structuredWithPlant.oem = reportingPlant
+    }
+    if (serialNumber) {
+      structuredWithPlant.serial_number = serialNumber
+      delete structuredWithPlant.location
     }
 
     const activityPayload = {
@@ -391,8 +409,8 @@ router.post('/', protectRoute, async (req, res, next) => {
       rawConversation: rawText,
       structuredData: structuredWithPlant,
     }
-    if (location) {
-      activityPayload.location = location
+    if (serialNumber) {
+      activityPayload.serialNumber = serialNumber
     }
     if (reportingPlant) {
       activityPayload.reportingPlant = reportingPlant
@@ -446,7 +464,7 @@ router.get('/', protectRoute, async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1, location: 1, reportingPlant: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, userId: 1, serialNumber: 1, reportingPlant: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -454,7 +472,7 @@ router.get('/', protectRoute, async (req, res, next) => {
     const activities = rows.map((a) => ({
       _id: a._id,
       customer: a.customer,
-      location: a.location,
+      serialNumber: a.serialNumber,
       reportingPlant: a.reportingPlant,
       summary: a.summary,
       createdAt: a.createdAt,
@@ -520,7 +538,7 @@ router.get('/admin', protectRoute, async (req, res, next) => {
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1, location: 1, reportingPlant: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, userId: 1, serialNumber: 1, reportingPlant: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -557,7 +575,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1, structuredData: 1, location: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, isArchived: 1, userId: 1, structuredData: 1, serialNumber: 1 })
       .lean()
 
     const esc = (value) => {
@@ -573,7 +591,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
       'employee_email',
       'employee_role',
       'customer',
-      'location',
+      'serial_number',
       'issue',
       'resolution',
       'summary',
@@ -606,7 +624,7 @@ router.get('/admin/export', protectRoute, requireRole('admin'), async (req, res,
         user.email || '',
         user.role || '',
         a.customer || '',
-        a.location || '',
+        a.serialNumber || '',
         issue,
         resolution,
         a.summary || '',
@@ -717,7 +735,7 @@ router.get('/admin/export/weekly-xlsx', protectRoute, requireRole('admin'), asyn
         isArchived: 1,
         userId: 1,
         structuredData: 1,
-        location: 1,
+        serialNumber: 1,
       })
       .lean()
 
@@ -764,7 +782,7 @@ router.get('/admin/archived', protectRoute, requireRole('admin'), async (req, re
         .skip(skip)
         .limit(limit)
         .populate('userId', 'name email role')
-        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1, structuredData: 1, location: 1 })
+        .select({ customer: 1, summary: 1, createdAt: 1, archivedAt: 1, userId: 1, structuredData: 1, serialNumber: 1 })
         .lean(),
       Activity.countDocuments(filter),
     ])
@@ -1025,15 +1043,24 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
     const hasImages = Array.isArray(images)
     const hasAttachments = Array.isArray(attachments)
     const body = req.body || {}
-    const hasLocationInBody = Object.prototype.hasOwnProperty.call(body, 'location')
-    const hasLocationInStructured =
-      hasStructured && Object.prototype.hasOwnProperty.call(structured, 'location')
-    const hasLocation = hasLocationInBody || hasLocationInStructured
+    const hasSerialInBody =
+      Object.prototype.hasOwnProperty.call(body, 'serialNumber') ||
+      Object.prototype.hasOwnProperty.call(body, 'serial_number') ||
+      Object.prototype.hasOwnProperty.call(body, 'location')
+    const hasSerialInStructured =
+      hasStructured &&
+      (Object.prototype.hasOwnProperty.call(structured, 'serialNumber') ||
+        Object.prototype.hasOwnProperty.call(structured, 'serial_number') ||
+        Object.prototype.hasOwnProperty.call(structured, 'location'))
+    const hasSerialNumber = hasSerialInBody || hasSerialInStructured
 
-    if (!hasRawText && !hasStructured && !hasImages && !hasAttachments && !hasLocation) {
+    if (!hasRawText && !hasStructured && !hasImages && !hasAttachments && !hasSerialNumber) {
       return res
         .status(400)
-        .json({ error: 'Provide at least one field to update: rawText, structured, images, attachments, or location' })
+        .json({
+          error:
+            'Provide at least one field to update: rawText, structured, images, attachments, or serialNumber',
+        })
     }
 
     if (hasRawText) {
@@ -1081,9 +1108,16 @@ router.patch('/:id', protectRoute, async (req, res, next) => {
       activity.attachments = normalizeAttachments(attachments) ?? []
     }
 
-    if (hasLocation) {
-      const nextLocation = pickLocationFromBody(body, structured)
-      activity.location = nextLocation ? nextLocation : undefined
+    if (hasSerialNumber) {
+      const nextSerial = pickSerialNumberFromBody(body, structured)
+      activity.serialNumber = nextSerial ? nextSerial : undefined
+      if (activity.structuredData && typeof activity.structuredData === 'object') {
+        const nextStructured = { ...activity.structuredData }
+        if (nextSerial) nextStructured.serial_number = nextSerial
+        else delete nextStructured.serial_number
+        delete nextStructured.location
+        activity.structuredData = nextStructured
+      }
     }
 
     await activity.save()
@@ -1124,7 +1158,7 @@ router.post('/admin/ai-query', protectRoute, requireRole('admin'), async (req, r
         isArchived: 1,
         userId: 1,
         structuredData: 1,
-        location: 1,
+        serialNumber: 1,
       })
       .lean()
 
@@ -1181,7 +1215,7 @@ router.post('/admin/ai-weekly-report', protectRoute, requireRole('admin'), async
         userId: 1,
         structuredData: 1,
         images: 1,
-        location: 1,
+        serialNumber: 1,
         reportingPlant: 1,
       })
       .lean()
@@ -1519,7 +1553,7 @@ router.post('/admin/weekly-report', protectRoute, requireRole('admin'), async (r
       .sort({ createdAt: -1 })
       .limit(max)
       .populate('userId', 'name email role')
-      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1, location: 1 })
+      .select({ customer: 1, summary: 1, createdAt: 1, structuredData: 1, rawConversation: 1, userId: 1, images: 1, serialNumber: 1 })
       .lean()
 
     const report = await generateWeeklyQualityReport(activities, { from, to })

@@ -248,7 +248,7 @@ export async function generateReportFromParams(params, opts = {}) {
         userId: 1,
         structuredData: 1,
         images: 1,
-        location: 1,
+        serialNumber: 1,
         reportingPlant: 1,
       })
       .lean()
@@ -284,7 +284,7 @@ export async function generateReportFromParams(params, opts = {}) {
       rawConversation: 1,
       userId: 1,
       images: 1,
-      location: 1,
+      serialNumber: 1,
       reportingPlant: 1,
     })
     .lean()

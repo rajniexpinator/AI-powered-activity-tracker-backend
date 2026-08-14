@@ -25,8 +25,12 @@ export function buildTeamsSeverityNotificationMessages(activity, severity) {
     typeof activity.customer === 'string' && activity.customer.trim() ? activity.customer.trim() : 'Customer'
   const summary =
     typeof activity.summary === 'string' && activity.summary.trim() ? activity.summary.trim() : 'Activity update'
-  const location =
-    typeof activity.location === 'string' && activity.location.trim() ? activity.location.trim() : '-'
+  const serialNumber =
+    typeof activity.serialNumber === 'string' && activity.serialNumber.trim()
+      ? activity.serialNumber.trim()
+      : typeof activity.structuredData?.serial_number === 'string' && activity.structuredData.serial_number.trim()
+        ? activity.structuredData.serial_number.trim()
+        : '-'
   const created = formatLocalDateTime(activity.createdAt)
   const rawConversation =
     typeof activity.rawConversation === 'string' && activity.rawConversation.trim()
@@ -36,7 +40,7 @@ export function buildTeamsSeverityNotificationMessages(activity, severity) {
   const header =
     `New AI log added (Severity ${severity})\n` +
     `Customer: ${customer}\n` +
-    `Location: ${location}\n` +
+    `Serial number: ${serialNumber}\n` +
     `Summary: ${summary}\n` +
     (created ? `Created: ${created}\n` : '') +
     `Log ID: ${String(activity._id)}`

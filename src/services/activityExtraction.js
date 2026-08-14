@@ -98,6 +98,7 @@ export function extractBarcodeScanBlock(rawText) {
  *   partName: string,
  *   partNumber: string,
  *   supplierCode: string,
+ *   serialNumber: string,
  *   scanNotes: string,
  *   barcode: string,
  *   scanBlock: string,
@@ -111,7 +112,8 @@ export function parseBarcodeLabeledFields(rawText) {
   const partName = readLabeledLine(source, ['Part name', 'Product name', 'Product', 'Part'])
   const partNumber = readLabeledLine(source, ['Part number', 'Part no', 'Part #', 'P/N', 'PN'])
   const supplierCode = readLabeledLine(source, ['Supplier code', 'Supplier #'])
-  const scanNotes = readLabeledLine(source, ['Notes', 'Note', 'Serial', 'Serial number', 'S/N'])
+  const serialNumber = readLabeledLine(source, ['Serial number', 'Serial', 'S/N'])
+  const scanNotes = readLabeledLine(source, ['Notes', 'Note'])
   const barcode = readLabeledLine(source, ['Scanned barcode', 'Barcode', 'QR code', 'QR'])
   const hasBarcodeBlock = Boolean(scanBlock || barcode || /\bscanned barcode\s*:/i.test(rawText || ''))
 
@@ -120,6 +122,7 @@ export function parseBarcodeLabeledFields(rawText) {
     partName,
     partNumber,
     supplierCode: supplierCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 5),
+    serialNumber,
     scanNotes,
     barcode,
     scanBlock,
@@ -133,7 +136,7 @@ function asNonEmptyString(value) {
 
 /**
  * Prefer explicit labeled barcode/mapping lines over model guesses.
- * Also keeps the scan block in notes (serials and free-form scan notes stay there).
+ * Also keeps the scan block in notes; serial number goes to its own field when labeled.
  *
  * @param {any} structured
  * @param {string} rawText
@@ -143,7 +146,13 @@ export function mergeBarcodeFieldsIntoStructured(structured, rawText) {
   const base = structured && typeof structured === 'object' ? { ...structured } : {}
   const parsed = parseBarcodeLabeledFields(rawText)
 
-  if (!parsed.hasBarcodeBlock && !parsed.partNumber && !parsed.customer && !parsed.partName) {
+  if (
+    !parsed.hasBarcodeBlock &&
+    !parsed.partNumber &&
+    !parsed.customer &&
+    !parsed.partName &&
+    !parsed.serialNumber
+  ) {
     return base
   }
 
@@ -159,6 +168,11 @@ export function mergeBarcodeFieldsIntoStructured(structured, rawText) {
   if (parsed.supplierCode) {
     base.supplier_code = parsed.supplierCode
     delete base.supplierCode
+  }
+  if (parsed.serialNumber) {
+    base.serial_number = parsed.serialNumber
+    delete base.serialNumber
+    delete base.location
   }
 
   // Keep scan details in notes when this log includes a barcode block.
@@ -195,7 +209,7 @@ You must respond with a single JSON object that matches this schema:
   "customer": string | null,              // Tier-1 / Tier-2 supplier name (e.g. "Bosch", "Inoac"), if known
   "oem": string | null,                   // OEM, e.g. "Ford", "GM", "Toyota", "Volvo"
   "plant": string | null,                 // Plant name, e.g. "Kentucky Truck Plant", or null if not stated
-  "location": string | null,              // Up to 5 chars — physical spot tag at the plant (cell, aisle, dock, line code), e.g. "A12", "B-7", "ZN102". Letters/digits/dash only, uppercased. null if not stated.
+  "serial_number": string | null,         // Part/unit serial number (up to ~128 chars). Prefer labeled "Serial number:" from scans. null if not stated.
   "area": string | null,                  // e.g. "line", "shop", "incoming quality", "engineering", "quality meeting", "manager-call", etc.
   "source_type": string,                  // One of: "daily-walk", "repair-shop", "incoming-quality", "engineering", "quality-meeting", "manager-call-email", "other"
   "summary": string,                      // One-sentence summary of what happened
@@ -218,21 +232,22 @@ You must respond with a single JSON object that matches this schema:
     "duration_minutes": number | null     // Duration in minutes if mentioned or can be inferred
   },
   "confidence": number,                   // 0–1 overall confidence in this extraction
-  "notes": string | null                  // Full barcode scan block and/or serial numbers; also ambiguity notes
+  "notes": string | null                  // Full barcode scan block and/or free-form notes; also ambiguity notes
 }
 
 Rules:
 - ALWAYS return valid JSON (no comments, no trailing commas).
 - "severity": Use 0 when the Apex employee is talking with the operator and everything is normal/no issue. Use 1 (low) for minor observations. Use 2 (medium) for standard quality issues with moderate impact. Use 3 (high) only when the text clearly signals major impact (e.g. line stop, safety, recall risk, repeated customer escalation). Use null if you cannot infer severity—the user will choose before saving.
-- "location": A short 1–5 character physical-location tag at the plant (e.g. "A12", "B-7", "ZN102"). Look for phrases like "at A12", "in cell B-7", "line ZN102", "dock 4". Only return letters, digits and dashes (uppercased) and at most 5 characters. If no location is mentioned, return null.
-- Barcode / scan blocks (CRITICAL): When the text includes labeled lines like "Scanned barcode:", "Supplier:" / "Customer:", "Part:", "Part number:", "Notes:", you MUST:
+- "serial_number": Extract when the text includes a labeled "Serial number:" / "Serial:" / "S/N:" line, or clearly states a serial. Do not put serials only in notes when a dedicated value is available. Do not use the old "location" field.
+- Barcode / scan blocks (CRITICAL): When the text includes labeled lines like "Scanned barcode:", "Supplier:" / "Customer:", "Part:", "Part number:", "Serial number:", "Notes:", you MUST:
   1) Put "Supplier"/"Customer" into "customer" (supplier name).
   2) Put "Part"/"Part name" into "part_name".
   3) Put "Part number" into "part_number".
   4) Put "Supplier code" into "supplier_code" when present.
-  5) Still copy the FULL scan block (including serial numbers and free-form Notes) into "notes".
+  5) Put "Serial number" / "Serial" / "S/N" into "serial_number" when present.
+  6) Still copy the FULL scan block into "notes".
   Do NOT leave part_number / customer empty when those labeled lines are present. Do NOT put the part number only in notes.
-- "part_number": Extract when the text mentions a part number, barcode mapping line "Part number: …", or a code in parentheses after a part name. Do not duplicate part_name into part_number. Never treat a serial number as part_number when both are present—serial stays in notes.
+- "part_number": Extract when the text mentions a part number, barcode mapping line "Part number: …", or a code in parentheses after a part name. Do not duplicate part_name into part_number. Never treat a serial number as part_number when both are present—serial goes to serial_number.
 - "supplier_code": Up to 5 characters, letters and digits only (uppercased). Only when clearly stated; otherwise null.
 - "vehicle_line": Include only values from this exact list when mentioned or implied: "Super Duty", "Expedition", "Navigator". Multiple allowed; empty array if none.
 - If some field is unknown, use null (or [] for arrays) instead of guessing wildly.
@@ -252,7 +267,7 @@ Rules:
     'You are an assistant that converts free-form Apex Quality Control activity descriptions into structured JSON for an internal tracker.',
     'The context is automotive plants where Apex represents Tier-1 / Tier-2 suppliers (e.g. Bosch, Inoac) inside OEM plants (mainly Ford, plus GM/Toyota/Volvo).',
     'Be conservative: when information is missing, set fields to null instead of inventing details.',
-    'When barcode scan text is present with labeled fields, always populate customer, part_name, and part_number from those labels, and also keep the full scan text in notes.',
+    'When barcode scan text is present with labeled fields, always populate customer, part_name, part_number, and serial_number from those labels, and also keep the full scan text in notes.',
   ]
 
   if (customerHint) {
@@ -277,8 +292,9 @@ Examples of situations you understand:
   Supplier: Bosch
   Part: BCM
   Part number: BCZM-1023
-  Notes: Serial SN-99881
-  → customer="Bosch", part_name="BCM", part_number="BCZM-1023", notes includes the full block (serial stays in notes).
+  Serial number: SN-99881
+  Notes: Incoming inspection
+  → customer="Bosch", part_name="BCM", part_number="BCZM-1023", serial_number="SN-99881", notes includes the full block.
 
 Now extract the structured activity from:
 

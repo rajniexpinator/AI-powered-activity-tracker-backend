@@ -206,7 +206,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
 
   row += 1
 
-  const headers = ['Day', 'Date', 'Part number', 'Location', 'Concern / QR number', 'Activity summary', 'Hours']
+  const headers = ['Day', 'Date', 'Part number', 'Serial number', 'Concern / QR number', 'Activity summary', 'Hours']
   headers.forEach((h, i) => {
     const cell = ws.getCell(row, i + 1)
     cell.value = h
@@ -249,7 +249,12 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
     for (const a of dayActs) {
       const st = getStructured(a)
       const part = st.part_name || st.part_number || ''
-      const location = (a.location || st.location || '').toString().toUpperCase()
+      const serialNumber = (
+        a.serialNumber ||
+        st.serial_number ||
+        st.serialNumber ||
+        ''
+      ).toString()
       const concern = st.concern_id || st.dtc_code || ''
       const activityText = activitySummaryForExport(a)
       const h = hoursFromActivity(a)
@@ -258,7 +263,7 @@ function writeWeekBlock(ws, startRow, customerKey, weekActivities, weekMonday, p
       ws.getCell(row, 1).value = DAY_LABELS[i]
       ws.getCell(row, 2).value = formatUsShort(dayDate)
       ws.getCell(row, 3).value = part
-      ws.getCell(row, 4).value = location
+      ws.getCell(row, 4).value = serialNumber
       ws.getCell(row, 5).value = concern
       ws.getCell(row, 6).value = activityText
       ws.getCell(row, 7).value = h != null ? h : ''

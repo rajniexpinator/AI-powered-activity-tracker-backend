@@ -8,6 +8,8 @@ import { reportsRouter } from './reports.routes.js'
 import { reportDashboardRouter } from './reportDashboard.routes.js'
 import { ms365Router } from './ms365.routes.js'
 import { barcodesRouter } from './barcodes.routes.js'
+import { barcodePatternsRouter } from './barcodePatterns.routes.js'
+import { barcodeBulkRouter } from './barcodeBulk.routes.js'
 import { employeeFilesRouter } from './employeeFiles.routes.js'
 const router = Router()
 
@@ -29,5 +31,7 @@ router.use('/reports', reportsRouter)
 router.use('/report-dashboard', reportDashboardRouter)
 router.use('/ms365', ms365Router)
 router.use('/barcodes', barcodesRouter)
+router.use('/barcode-patterns', barcodePatternsRouter)
+router.use('/barcode-bulk', barcodeBulkRouter)
 router.use('/employee-files', employeeFilesRouter)
 export { router as apiRouter }

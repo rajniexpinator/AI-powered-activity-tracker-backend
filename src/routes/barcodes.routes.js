@@ -1,6 +1,8 @@
 import { Router } from 'express'
 import { protectRoute, requireRole } from '../middleware/auth.js'
 import { BarcodeMapping } from '../models/BarcodeMapping.js'
+import { BarcodePattern } from '../models/BarcodePattern.js'
+import { applySegments, buildStructureKey } from '../services/barcodePattern.js'
 import { createChatCompletion, getAssistantContent, isOpenAIAvailable } from '../services/openai.js'
 
 const router = Router()
@@ -13,16 +15,55 @@ function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-async function buildClarificationPrompt({ barcode, mapping }) {
-  const customer = mapping?.customer ? String(mapping.customer).trim() : ''
-  const partName = mapping?.partName ? String(mapping.partName).trim() : ''
-  const partNumber = mapping?.partNumber ? String(mapping.partNumber).trim() : ''
-  const productName = mapping?.productName ? String(mapping.productName).trim() : ''
-  const partLabel = [partName || productName, partNumber].filter(Boolean).join(' · ')
+function serializeMapping(mapping) {
+  if (!mapping) return null
+  return {
+    barcode: mapping.barcode,
+    partName: mapping.partName || mapping.productName,
+    partNumber: mapping.partNumber,
+    productName: mapping.productName,
+    customer: mapping.customer,
+    serialNumber: mapping.serialNumber || '',
+    scanCount: mapping.scanCount,
+    metadata: mapping.metadata,
+    updatedAt: mapping.updatedAt,
+    createdAt: mapping.createdAt,
+  }
+}
+
+async function findMatchingPattern(barcode) {
+  const structureKey = buildStructureKey(barcode)
+  const pattern = await BarcodePattern.findOne({ structureKey, isActive: true })
+    .sort({ updatedAt: -1 })
+    .lean()
+  if (!pattern) return { structureKey, pattern: null, extracted: null }
+  if (barcode.length !== pattern.sampleBarcode.length) {
+    return { structureKey, pattern, extracted: null }
+  }
+  return {
+    structureKey,
+    pattern,
+    extracted: applySegments(barcode, pattern.segments),
+  }
+}
+
+async function buildClarificationPrompt({ barcode, mapping, extracted }) {
+  const customer =
+    mapping?.customer ||
+    extracted?.customer ||
+    extracted?.supplier ||
+    ''
+  const partName = mapping?.partName || mapping?.productName || extracted?.partName || ''
+  const partNumber = mapping?.partNumber || extracted?.partNumber || ''
+  const serialNumber = mapping?.serialNumber || extracted?.serialNumber || ''
+  const partLabel = [partName, partNumber].filter(Boolean).join(' · ')
+  const known = Boolean(mapping || extracted)
 
   if (!isOpenAIAvailable()) {
-    if (mapping) {
-      const label = [partLabel, customer].filter(Boolean).join(' · ') || barcode
+    if (known) {
+      const label = [partLabel, customer, serialNumber ? `SN ${serialNumber}` : '']
+        .filter(Boolean)
+        .join(' · ') || barcode
       return {
         mode: 'known',
         prompt: `Any notes regarding this part? (${label})`,
@@ -31,8 +72,9 @@ async function buildClarificationPrompt({ barcode, mapping }) {
     }
     return {
       mode: 'unknown',
-      prompt: 'This barcode is new. What customer and part number/product is it? Any notes regarding this part?',
-      fields: ['customer', 'partName', 'partNumber', 'notes'],
+      prompt:
+        'This barcode is new. What customer, part number/product, and serial number is it? Any notes regarding this part?',
+      fields: ['customer', 'partName', 'partNumber', 'serialNumber', 'notes'],
     }
   }
 
@@ -41,13 +83,14 @@ You are an internal assistant for a quality tracking app.
 Given a scanned barcode and (optional) known mapping, write one short clarification question for the user.
 Return ONLY plain text. Keep it concise.`.trim()
 
-  const user = mapping
+  const user = known
     ? `
 Barcode: ${barcode}
 Known mapping:
 - Customer: ${customer || '(unknown)'}
-- Part Name: ${partName || productName || '(unknown)'}
+- Part Name: ${partName || '(unknown)'}
 - Part Number: ${partNumber || '(unknown)'}
+- Serial number: ${serialNumber || '(unknown)'}
 
 Ask a short follow-up question requesting notes for this known part.`
         .trim()
@@ -56,7 +99,7 @@ Barcode: ${barcode}
 No mapping exists yet.
 
 Ask a short question requesting:
-1) the customer name and 2) the part number/product name, then ask for any notes.`
+1) the customer name, 2) the part number/product name, 3) serial number if known, then ask for any notes.`
         .trim()
 
   const completion = await createChatCompletion(
@@ -69,23 +112,25 @@ Ask a short question requesting:
 
   const text = getAssistantContent(completion)?.trim()
   if (text) {
-    return mapping
+    return known
       ? { mode: 'known', prompt: text, fields: ['notes'] }
-      : { mode: 'unknown', prompt: text, fields: ['customer', 'partName', 'partNumber', 'notes'] }
+      : {
+          mode: 'unknown',
+          prompt: text,
+          fields: ['customer', 'partName', 'partNumber', 'serialNumber', 'notes'],
+        }
   }
 
-  return mapping
+  return known
     ? { mode: 'known', prompt: 'Any notes regarding this part?', fields: ['notes'] }
     : {
         mode: 'unknown',
-        prompt: 'What customer, part name and part number is this? Any notes regarding this part?',
-        fields: ['customer', 'partName', 'partNumber', 'notes'],
+        prompt: 'What customer, part name, part number, and serial number is this? Any notes?',
+        fields: ['customer', 'partName', 'partNumber', 'serialNumber', 'notes'],
       }
 }
 
 // POST /api/barcodes/clarify
-// Body: { barcode: string }
-// Returns a follow-up prompt for the user (unknown vs known barcode).
 router.post('/clarify', protectRoute, async (req, res, next) => {
   try {
     const { barcode: rawBarcode } = req.body || {}
@@ -93,31 +138,30 @@ router.post('/clarify', protectRoute, async (req, res, next) => {
     if (!barcode) return res.status(400).json({ error: 'barcode is required' })
 
     const mapping = await BarcodeMapping.findOne({ barcode }).lean()
-    const clarification = await buildClarificationPrompt({ barcode, mapping })
+    const { structureKey, pattern, extracted } = await findMatchingPattern(barcode)
+    const clarification = await buildClarificationPrompt({ barcode, mapping, extracted })
 
     res.json({
       barcode,
       ...clarification,
-      mapping: mapping
+      structureKey,
+      mapping: serializeMapping(mapping),
+      pattern: pattern
         ? {
-            barcode: mapping.barcode,
-            partName: mapping.partName || mapping.productName,
-            partNumber: mapping.partNumber,
-            productName: mapping.productName,
-            customer: mapping.customer,
-            scanCount: mapping.scanCount,
-            updatedAt: mapping.updatedAt,
-            createdAt: mapping.createdAt,
+            _id: pattern._id,
+            name: pattern.name || '',
+            sampleBarcode: pattern.sampleBarcode,
+            structureKey: pattern.structureKey,
           }
         : null,
+      extracted: extracted || null,
     })
   } catch (err) {
     next(err)
   }
 })
 
-// GET /api/barcodes/admin — admin: paginated report of all barcode / QR mappings
-// Query: q (search barcode, customer, part fields), limit, page
+// GET /api/barcodes/admin
 router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) => {
   try {
     const rawLimit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN
@@ -137,6 +181,7 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
         { partName: re },
         { partNumber: re },
         { productName: re },
+        { serialNumber: re },
       ]
     }
 
@@ -160,6 +205,7 @@ router.get('/admin', protectRoute, requireRole('admin'), async (req, res, next) 
         partNumber: m.partNumber,
         productName: m.productName,
         customer: m.customer,
+        serialNumber: m.serialNumber || '',
         scanCount: m.scanCount ?? 0,
         metadata: m.metadata,
         lastScannedBy: m.lastScannedBy
@@ -191,26 +237,13 @@ router.get('/:barcode', protectRoute, async (req, res, next) => {
     const mapping = await BarcodeMapping.findOne({ barcode }).lean()
     if (!mapping) return res.status(404).json({ error: 'Barcode not found' })
 
-    res.json({
-      mapping: {
-        barcode: mapping.barcode,
-        partName: mapping.partName || mapping.productName,
-        partNumber: mapping.partNumber,
-        productName: mapping.productName,
-        customer: mapping.customer,
-        scanCount: mapping.scanCount,
-        updatedAt: mapping.updatedAt,
-        createdAt: mapping.createdAt,
-      },
-    })
+    res.json({ mapping: serializeMapping(mapping) })
   } catch (err) {
     next(err)
   }
 })
 
 // POST /api/barcodes/scan
-// Body: { barcode: string }
-// Increments scanCount and sets lastScannedBy. Returns mapping if exists.
 router.post('/scan', protectRoute, async (req, res, next) => {
   try {
     const { barcode: rawBarcode } = req.body || {}
@@ -225,17 +258,14 @@ router.post('/scan', protectRoute, async (req, res, next) => {
 
     if (!mapping) return res.status(404).json({ error: 'Barcode not found' })
 
+    const { pattern, extracted } = await findMatchingPattern(barcode)
+
     res.json({
-      mapping: {
-        barcode: mapping.barcode,
-        partName: mapping.partName || mapping.productName,
-        partNumber: mapping.partNumber,
-        productName: mapping.productName,
-        customer: mapping.customer,
-        scanCount: mapping.scanCount,
-        updatedAt: mapping.updatedAt,
-        createdAt: mapping.createdAt,
-      },
+      mapping: serializeMapping(mapping),
+      pattern: pattern
+        ? { _id: pattern._id, name: pattern.name || '', structureKey: pattern.structureKey }
+        : null,
+      extracted: extracted || null,
     })
   } catch (err) {
     next(err)
@@ -243,14 +273,12 @@ router.post('/scan', protectRoute, async (req, res, next) => {
 })
 
 // PUT /api/barcodes/:barcode
-// Creates or updates mapping.
-// Body: { customer?: string, partName?: string, partNumber?: string, productName?: string, metadata?: any }
 router.put('/:barcode', protectRoute, async (req, res, next) => {
   try {
     const barcode = normalizeBarcode(req.params.barcode)
     if (!barcode) return res.status(400).json({ error: 'barcode is required' })
 
-    const { customer, partName, partNumber, productName, metadata } = req.body || {}
+    const { customer, partName, partNumber, productName, serialNumber, metadata } = req.body || {}
     const update = {}
     if (typeof customer === 'string') update.customer = normalizeText(customer) || undefined
     if (typeof partName === 'string') update.partName = normalizeText(partName) || undefined
@@ -259,10 +287,16 @@ router.put('/:barcode', protectRoute, async (req, res, next) => {
     if (typeof partName !== 'string' && typeof productName === 'string') {
       update.partName = normalizeText(productName) || undefined
     }
+    if (typeof serialNumber === 'string') {
+      update.serialNumber = normalizeText(serialNumber).slice(0, 128) || undefined
+    }
     if (metadata !== undefined) update.metadata = metadata
 
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: 'Provide at least one field: customer, partName, partNumber, productName, metadata' })
+      return res.status(400).json({
+        error:
+          'Provide at least one field: customer, partName, partNumber, productName, serialNumber, metadata',
+      })
     }
 
     update.lastScannedBy = req.user._id
@@ -273,22 +307,10 @@ router.put('/:barcode', protectRoute, async (req, res, next) => {
       { new: true, upsert: true }
     ).lean()
 
-    res.json({
-      mapping: {
-        barcode: mapping.barcode,
-        partName: mapping.partName || mapping.productName,
-        partNumber: mapping.partNumber,
-        productName: mapping.productName,
-        customer: mapping.customer,
-        scanCount: mapping.scanCount,
-        updatedAt: mapping.updatedAt,
-        createdAt: mapping.createdAt,
-      },
-    })
+    res.json({ mapping: serializeMapping(mapping) })
   } catch (err) {
     next(err)
   }
 })
 
 export { router as barcodesRouter }
-
